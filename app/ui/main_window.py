@@ -1,8 +1,9 @@
-"""Standalone JARVIS desktop interface."""
+"""Main JARVIS desktop window."""
 
 from __future__ import annotations
 
-from PySide6.QtCore import QThread, Qt, Signal, Slot
+from PySide6.QtCore import QThread, QTimer, Signal
+from PySide6.QtGui import QTextCursor
 from PySide6.QtWidgets import (
     QApplication,
     QHBoxLayout,
@@ -16,244 +17,349 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from app.agent.router import Router
+from app.agent.events import EventType, get_event_bus
 from app.agent.pipeline import AgentPipeline
-from app.agent.session import Session
-from app.config.app_config import AppConfig
-from app.ui.hotkey import GlobalHotkey
-from app.ui.tray import JarvisTray
 from app.voice.assistant import VoiceAssistant
-from app.voice.background import BackgroundVoice
+from app.voice.background import BackgroundVoiceEngine
 
 
-class RequestWorker(QThread):
-    """Run one Router request away from the GUI thread."""
+class AgentWorker(QThread):
+    """Runs the agent pipeline without blocking the GUI."""
 
     finished = Signal(str)
-    failed = Signal(str)
-    confirmation_requested = Signal(object)
 
-    def __init__(self, text: str, config: AppConfig, session: Session, pipeline: AgentPipeline | None = None):
+    def __init__(
+        self,
+        pipeline: AgentPipeline,
+        text: str,
+    ):
         super().__init__()
-        self.text = text
-        self.config = config
-        self.session = session
+
         self.pipeline = pipeline
+        self.text = text
 
-    def run(self):
-        try:
-            if self.pipeline is not None:
-                self.finished.emit(self.pipeline.process(self.text))
-            else:
-                router = Router(model=self.config.get("model", "qwen3:8b"), confirm_callback=self.request_confirmation, session=self.session)
-                self.finished.emit(router.route(self.text))
-        except Exception as exc:
-            self.failed.emit(f"{type(exc).__name__}: {exc}")
+    def run(self) -> None:
+        response = self.pipeline.process(
+            self.text
+        )
 
-    def request_confirmation(self, message: str) -> bool:
-        request = type("Confirmation", (), {})()
-        request.message = message
-        request.approved = False
-        request.event = __import__("threading").Event()
-        self.confirmation_requested.emit(request)
-        request.event.wait()
-        return request.approved
+        self.finished.emit(response)
 
 
 class MainWindow(QMainWindow):
-    """Main JARVIS application window."""
+    """JARVIS desktop interface."""
 
-    def __init__(self, pipeline: AgentPipeline | None = None, voice_engine=None):
+    def __init__(
+        self,
+        pipeline: AgentPipeline,
+        voice_engine: BackgroundVoiceEngine,
+    ):
         super().__init__()
-        self.config = AppConfig()
-        self.allow_close = False
-        self.session = Session()
-        self.pipeline = pipeline or AgentPipeline(session=self.session)
-        self.worker = None
-        self.voice_assistant = None
-        self.background_voice = voice_engine
+
+        self.pipeline = pipeline
+        self.voice_engine = voice_engine
+
+        self.events = get_event_bus()
+
+        self.worker: AgentWorker | None = None
+
+        self.setWindowTitle("JARVIS")
+        self.resize(900, 650)
+
         self._build_ui()
 
-        self.tray = JarvisTray(self)
-        self.tray.show()
-        self.hotkey = GlobalHotkey(self.show_from_hotkey)
-        self.hotkey.start()
-
-        self.resize(
-            self.config.get("window_width", 1100),
-            self.config.get("window_height", 750),
+        self.event_timer = QTimer(self)
+        self.event_timer.timeout.connect(
+            self._process_events
         )
-        self._append("JARVIS: Online.\nLocal brain: Qwen3 8B\n")
+        self.event_timer.start(100)
 
-        if self.config.get("start_minimized", False):
-            self.hide()
-
-    def _build_ui(self):
-        self.setWindowTitle("JARVIS")
+    def _build_ui(self) -> None:
         central = QWidget()
-        self.setCentralWidget(central)
         layout = QVBoxLayout(central)
 
-        title = QLabel("JARVIS")
-        title.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        title.setStyleSheet("font-size: 32px; font-weight: bold; padding: 12px;")
-        layout.addWidget(title)
+        self.status_label = QLabel(
+            "JARVIS ready."
+        )
 
-        self.status = QLabel("ONLINE")
-        self.status.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        layout.addWidget(self.status)
+        self.chat = QTextEdit()
+        self.chat.setReadOnly(True)
 
-        self.output = QTextEdit()
-        self.output.setReadOnly(True)
-        layout.addWidget(self.output)
-
-        row = QHBoxLayout()
         self.input = QLineEdit()
-        self.input.setPlaceholderText("Ask JARVIS...")
-        self.input.returnPressed.connect(self.submit)
-        row.addWidget(self.input)
+        self.input.setPlaceholderText(
+            "Talk to JARVIS..."
+        )
+        self.input.returnPressed.connect(
+            self.send_message
+        )
 
-        self.send_button = QPushButton("Send")
-        self.send_button.clicked.connect(self.submit)
-        row.addWidget(self.send_button)
+        button_row = QHBoxLayout()
 
-        self.voice_button = QPushButton("Voice")
-        self.voice_button.clicked.connect(self.voice_request)
-        row.addWidget(self.voice_button)
+        self.send_button = QPushButton(
+            "Send"
+        )
+        self.send_button.clicked.connect(
+            self.send_message
+        )
 
-        self.always_on_button = QPushButton("Start Listening")
-        self.always_on_button.clicked.connect(self.toggle_background_voice)
-        row.addWidget(self.always_on_button)
+        self.voice_button = QPushButton(
+            "Start Voice"
+        )
+        self.voice_button.clicked.connect(
+            self.toggle_voice
+        )
 
-        self.clear_button = QPushButton("Clear")
-        self.clear_button.clicked.connect(self.clear_chat)
-        row.addWidget(self.clear_button)
-        layout.addLayout(row)
+        self.stop_button = QPushButton(
+            "Stop Speaking"
+        )
+        self.stop_button.clicked.connect(
+            self.stop_speaking
+        )
 
-    def _append(self, text: str):
-        self.output.append(text)
+        self.clear_button = QPushButton(
+            "Clear Chat"
+        )
+        self.clear_button.clicked.connect(
+            self.clear_chat
+        )
 
-    @Slot()
-    def submit(self):
+        button_row.addWidget(
+            self.send_button
+        )
+        button_row.addWidget(
+            self.voice_button
+        )
+        button_row.addWidget(
+            self.stop_button
+        )
+        button_row.addWidget(
+            self.clear_button
+        )
+
+        layout.addWidget(
+            self.status_label
+        )
+        layout.addWidget(
+            self.chat
+        )
+        layout.addWidget(
+            self.input
+        )
+        layout.addLayout(
+            button_row
+        )
+
+        self.setCentralWidget(
+            central
+        )
+
+    def send_message(self) -> None:
         text = self.input.text().strip()
-        if not text or self.worker is not None:
+
+        if not text:
             return
+
+        if self.pipeline.busy:
+            self.status_label.setText(
+                "JARVIS is still working..."
+            )
+            return
+
         self.input.clear()
-        self._append(f"\nYou:\n{text}\n")
-        self._set_busy(True)
-        self.worker = RequestWorker(text, self.config, self.session, self.pipeline)
-        self.worker.finished.connect(self._request_finished)
-        self.worker.failed.connect(self._request_failed)
-        self.worker.confirmation_requested.connect(self._confirm_request)
-        self.worker.finished.connect(self._clear_worker)
-        self.worker.failed.connect(self._clear_worker)
+
+        self._append_message(
+            "You",
+            text,
+        )
+
+        self._set_controls_enabled(
+            False
+        )
+
+        self.status_label.setText(
+            "JARVIS is thinking..."
+        )
+
+        self.worker = AgentWorker(
+            self.pipeline,
+            text,
+        )
+
+        self.worker.finished.connect(
+            self._agent_finished
+        )
+
+        self.worker.finished.connect(
+            self._worker_finished
+        )
+
         self.worker.start()
 
-    @Slot(str)
-    def _request_finished(self, result: str):
-        self._append(f"JARVIS:\n{result}\n")
+    def _agent_finished(
+        self,
+        response: str,
+    ) -> None:
+        self._append_message(
+            "JARVIS",
+            response,
+        )
 
-    @Slot(str)
-    def _request_failed(self, error: str):
-        self._append(f"JARVIS ERROR:\n{error}\n")
+    def _worker_finished(self) -> None:
+        self._set_controls_enabled(
+            True
+        )
 
-    def _clear_worker(self, _value):
-        self._set_busy(False)
+        self.status_label.setText(
+            "JARVIS ready."
+        )
+
+        if self.worker:
+            self.worker.deleteLater()
+
         self.worker = None
 
-    @Slot(object)
-    def _confirm_request(self, request):
-        result = QMessageBox.question(
-            self,
-            "JARVIS Confirmation",
-            request.message,
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-            QMessageBox.StandardButton.No,
+    def toggle_voice(self) -> None:
+        if self.voice_engine.running:
+            self.voice_engine.stop()
+
+            self.voice_button.setText(
+                "Start Voice"
+            )
+
+            self.status_label.setText(
+                "Voice listening stopped."
+            )
+
+        else:
+            try:
+                self.voice_engine.start()
+
+                self.voice_button.setText(
+                    "Stop Voice"
+                )
+
+                self.status_label.setText(
+                    "Listening for wake word..."
+                )
+
+            except Exception as exc:
+                QMessageBox.critical(
+                    self,
+                    "Voice Error",
+                    str(exc),
+                )
+
+    def stop_speaking(self) -> None:
+        self.voice_engine.assistant.stop_speaking()
+
+        self.status_label.setText(
+            "Speech stopped."
         )
-        request.approved = result == QMessageBox.StandardButton.Yes
-        request.event.set()
 
-    @Slot()
-    def voice_request(self):
-        self._set_busy(True)
-        self._append("\nListening...\n")
-        try:
-            if self.voice_assistant is None:
-                self.voice_assistant = VoiceAssistant(pipeline=self.pipeline)
-            text = self.voice_assistant.listen_once(self.config.get("voice_record_seconds", 5))
-            if not text:
-                self._append("JARVIS: I did not hear anything.\n")
-                return
-            self._append(f"You:\n{text}\n")
-            response = self.voice_assistant.process_text(text)
-            self._append(f"JARVIS:\n{response}\n")
-            self.voice_assistant.tts.speak(response)
-        except Exception as exc:
-            self._append(f"VOICE ERROR:\n{type(exc).__name__}: {exc}\n")
-        finally:
-            self._set_busy(False)
+    def clear_chat(self) -> None:
+        self.pipeline.clear_session()
+        self.chat.clear()
 
-    def clear_chat(self):
-        self.session.clear()
-        self.output.clear()
-        self._append("JARVIS: Conversation cleared.")
+        self.status_label.setText(
+            "Conversation memory cleared."
+        )
 
-    @Slot()
-    def toggle_background_voice(self):
-        try:
-            if self.background_voice is None:
-                if self.voice_assistant is None:
-                    self.voice_assistant = VoiceAssistant(pipeline=self.pipeline)
-                self.background_voice = BackgroundVoice(self.voice_assistant)
-                self.background_voice.on_status = self.on_voice_status
+    def _process_events(self) -> None:
+        """Process background events safely on the Qt thread."""
+        events = self.events.drain(
+            limit=100
+        )
 
-            if self.background_voice.running:
-                self.stop_background_voice()
-                self._append("JARVIS: Background listening stopped.\n")
-            else:
-                self.background_voice.start()
-                self.always_on_button.setText("Stop Listening")
-                self._append("JARVIS: Background listening enabled. Say 'Jarvis' followed by your command.\n")
-        except Exception as exc:
-            self._append(f"BACKGROUND VOICE ERROR:\n{type(exc).__name__}: {exc}\n")
+        for event in events:
+            if event.type == EventType.TOOL_START:
+                tool = event.data.get(
+                    "tool",
+                    "tool",
+                )
 
-    def on_voice_status(self, status: str):
-        self.status.setText(status.upper())
+                self.status_label.setText(
+                    f"Using {tool}..."
+                )
 
-    def stop_background_voice(self):
-        if self.background_voice is not None:
-            self.background_voice.stop()
-        if hasattr(self, "always_on_button"):
-            self.always_on_button.setText("Start Listening")
-        self.status.setText("ONLINE")
+            elif event.type == EventType.THINKING_START:
+                self.status_label.setText(
+                    "Thinking..."
+                )
 
-    def confirm_action(self, message: str) -> bool:
-        result = QMessageBox.question(self, "JARVIS Confirmation", message, QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No, QMessageBox.StandardButton.No)
-        return result == QMessageBox.StandardButton.Yes
+            elif event.type == EventType.SPEECH_START:
+                self.status_label.setText(
+                    "Listening..."
+                )
 
-    def _set_busy(self, busy: bool):
-        self.send_button.setEnabled(not busy)
-        self.voice_button.setEnabled(not busy)
-        self.input.setEnabled(not busy)
-        self.status.setText("THINKING..." if busy else "ONLINE")
+            elif event.type == EventType.SPEAKING_START:
+                self.status_label.setText(
+                    "Speaking..."
+                )
 
-    def show_from_hotkey(self):
-        self.show()
-        self.showNormal()
-        self.activateWindow()
-        self.raise_()
-        self.input.setFocus()
+            elif event.type == EventType.LISTENING_STARTED:
+                self.status_label.setText(
+                    "Listening for wake word..."
+                )
 
-    def closeEvent(self, event):
-        if self.config.get("minimize_to_tray", True) and not self.allow_close:
-            event.ignore()
-            self.hide()
-            self.tray.tray.showMessage("JARVIS", "Still running in the system tray.", 2000)
-            return
-        self.stop_background_voice()
-        self.hotkey.stop()
-        self.tray.hide()
-        self.config.set("window_width", self.width())
-        self.config.set("window_height", self.height())
-        self.config.save()
+            elif event.type == EventType.LISTENING_STOPPED:
+                self.status_label.setText(
+                    "Voice listening stopped."
+                )
+
+            elif event.type == EventType.ERROR:
+                message = event.data.get(
+                    "message",
+                    "Unknown error",
+                )
+
+                self.status_label.setText(
+                    "Error."
+                )
+
+                self._append_message(
+                    "System",
+                    message,
+                )
+
+    def _append_message(
+        self,
+        speaker: str,
+        text: str,
+    ) -> None:
+        self.chat.append(
+            f"<b>{speaker}:</b> {text}"
+        )
+
+        cursor = self.chat.textCursor()
+        cursor.movePosition(
+            QTextCursor.End
+        )
+
+        self.chat.setTextCursor(
+            cursor
+        )
+
+    def _set_controls_enabled(
+        self,
+        enabled: bool,
+    ) -> None:
+        self.send_button.setEnabled(
+            enabled
+        )
+        self.input.setEnabled(
+            enabled
+        )
+
+    def closeEvent(self, event) -> None:
+        if self.voice_engine.running:
+            self.voice_engine.stop()
+
+        if (
+            self.worker
+            and self.worker.isRunning()
+        ):
+            self.worker.wait(
+                3000
+            )
+
         event.accept()

@@ -1,35 +1,48 @@
-"""JARVIS brain: local Ollama model with tool calling."""
+"""Core reasoning engine for the JARVIS agent."""
+
+from __future__ import annotations
 
 import json
-import re
-from typing import Callable, Optional
+from typing import Any
 
 from ollama import chat
 
 from app.agent.events import EventType, get_event_bus
-from app.agent.logging import logger
-from app.agent.security import PermissionLevel, SecurityManager
-from app.tools.applications import open_application
-from app.tools.terminal import run_command
-from app.tools.filesystem import (
-    list_directory,
-    search_files,
-    read_file,
-    write_file,
-    edit_file,
+from app.agent.logging import get_logger
+from app.agent.security import (
+    PermissionLevel,
+    SecurityManager,
+    check_command,
+    check_file_edit,
+    check_file_write,
 )
-from app.tools.testing import run_tests
-from app.tools.health import health_check
-from app.tools.computer import computer_control, computer_health
-from app.tools.browser import browser_action, browser_search, open_browser, open_url
-from app.tools.spotify import spotify_next, spotify_pause, spotify_play, spotify_previous, spotify_status
+from app.memory.store import MemoryStore
+
+from app.tools.applications import open_application
+from app.tools.browser import (
+    browser_action,
+    browser_search,
+    open_browser,
+    open_url,
+)
 from app.tools.code_index import (
     build_code_index,
-    search_code_relationships,
     build_code_relationships,
+    search_code_relationships,
     build_change_impact,
     select_tests_for_change,
     diagnose_test_failure,
+)
+from app.tools.computer import (
+    computer_control,
+    computer_health,
+)
+from app.tools.filesystem import (
+    edit_file,
+    list_directory,
+    read_file,
+    search_files,
+    write_file,
 )
 from app.tools.git import (
     git_status,
@@ -41,20 +54,83 @@ from app.tools.git import (
     git_commit,
     git_push,
 )
+from app.tools.health import health_check
+from app.tools.system import SystemTools
+from app.tools.terminal import run_command
+from app.tools.testing import run_tests
 
 
 class Brain:
-    """Local JARVIS reasoning and tool-execution engine."""
+    """Qwen-backed reasoning and tool-execution engine."""
+
+    MODEL = "qwen3:8b"
+    MAX_TOOL_ITERATIONS = 8
+
+    SYSTEM_PROMPT = """
+You are JARVIS, a local personal AI assistant running on Windows.
+
+You have real tools available to interact with the computer and project.
+
+CRITICAL RULES:
+
+1. NEVER pretend that you performed an action.
+2. NEVER invent tool results.
+3. NEVER claim a file was created unless the tool actually created it.
+4. NEVER claim a test passed unless an actual test command passed.
+5. NEVER claim Git changed unless Git actually reported the change.
+6. Use tools whenever the user's request requires real computer access.
+7. For coding tasks, inspect the relevant files before modifying them.
+8. For existing files, use edit_file.
+9. For new files, use write_file.
+10. After code modifications, run appropriate tests or syntax checks.
+11. If a test fails, diagnose the actual failure and attempt a repair.
+12. Do not endlessly retry the same failed operation.
+13. Never expose secrets, passwords, API keys, tokens, or private credentials.
+14. Do not weaken Windows security.
+15. Never disable antivirus, Defender, firewall, or security controls.
+16. Destructive or security-sensitive operations require confirmation.
+17. Git commit, push, reset, and checkpoint operations require confirmation.
+18. Do not automatically commit or push unless explicitly requested.
+19. When asked about the current conversation, use the supplied conversation context.
+20. Treat previous assistant statements as context, not as proof that an action succeeded.
+21. If a tool fails, report the actual failure.
+22. Be concise unless detailed explanation is useful.
+
+CODING WORKFLOW:
+
+inspect -> locate -> read -> understand -> modify -> verify -> test -> report.
+
+You are a real local agent, not a fictional assistant pretending to control the machine.
+"""
 
     def __init__(
         self,
-        model: str = "qwen3:8b",
-        confirm_callback: Optional[Callable[[str], bool]] = None,
+        model: str | None = None,
+        security: SecurityManager | None = None,
+        memory: MemoryStore | None = None,
+        confirm_callback=None,
     ):
-        self.model = model
+        self.name = "JARVIS"
+        self.model = model or self.MODEL
+
+        self.security = (
+            security
+            if security is not None
+            else SecurityManager()
+        )
+
+        self.memory = (
+            memory
+            if memory is not None
+            else MemoryStore()
+        )
+
         self.confirm_callback = confirm_callback
-        self.security = SecurityManager()
+
         self.events = get_event_bus()
+        self.logger = get_logger()
+
+        self.system_tools = SystemTools()
 
         self.tools = [
             open_application,
@@ -65,6 +141,14 @@ class Brain:
             write_file,
             edit_file,
             run_tests,
+
+            build_code_index,
+            build_code_relationships,
+            search_code_relationships,
+            build_change_impact,
+            select_tests_for_change,
+            diagnose_test_failure,
+
             git_status,
             git_diff,
             git_diff_cached,
@@ -73,456 +157,342 @@ class Brain:
             git_add,
             git_commit,
             git_push,
-            build_code_index,
-            build_code_relationships,
-            search_code_relationships,
-            build_change_impact,
-            select_tests_for_change,
-            diagnose_test_failure,
+
             health_check,
+
             computer_control,
             computer_health,
+
             open_browser,
             open_url,
             browser_search,
             browser_action,
-            spotify_status,
-            spotify_play,
-            spotify_pause,
-            spotify_next,
-            spotify_previous,
         ]
 
-        self.max_iterations = 10
-
-    def _system_prompt(self) -> str:
-        return """
-You are JARVIS, a local AI coding and computer assistant.
-
-You have REAL tools available.
-
-You MUST:
-- Use tools when the user asks you to inspect, search, read, create,
-  modify, test, debug, or execute something.
-- Never pretend that a tool was executed.
-- Never invent filenames, directories, file contents, command output,
-  test results, or errors.
-- Trust actual tool results over assumptions.
-- For directory inspection use list_directory.
-- For searching code use search_files.
-- For reading files use read_file.
-- For creating new files use write_file.
-- For editing existing files use edit_file only after reading the
-  actual file.
-- Never invent old_text for edit_file.
-- For running tests use run_tests.
-- After modifying code, verify the change whenever practical.
-- If a test fails, inspect the actual failure and attempt to fix it.
-- Do not claim success unless the tool result confirms success.
-
-For Git operations:
-- Use git_status to inspect repository state.
-- Use git_diff and git_diff_cached to inspect changes.
-- Use git_log to inspect recent commits.
-- Use git_branch to inspect the current branch.
-- Use git_add to stage explicitly selected files.
-- Use git_commit to create a commit.
-- Use git_push to push changes.
-- Only use git_add when the user explicitly requests staging or has
-    explicitly approved a commit workflow.
-- Only use git_commit after explicit user approval.
-- Only use git_push after explicit user approval.
-- Never create a commit or push unless the user explicitly asks.
-- Never invent Git status, diffs, commit hashes, or push results.
-- Never use destructive Git history operations unless explicitly requested.
-
-For file creation:
-- If the requested file does not exist, use write_file.
-- Do not use edit_file with invented old_text.
-
-For existing-file modifications:
-- Read the file first.
-- Make the smallest appropriate change.
-- Verify the resulting file.
-
-For tests:
-- Use the dedicated run_tests tool.
-- Report the actual test runner, passed, failed, errors, skipped,
-  exit code, and relevant output when available.
-
-CODE KNOWLEDGE AND IMPACT:
-- Use build_code_index for Python classes, functions, methods, imports,
-    and source locations.
-- Use build_code_relationships or search_code_relationships for local
-    static import relationships.
-- Use build_change_impact before substantial changes to an existing
-    Python file to identify dependencies, dependents, and related tests.
-- Use select_tests_for_change to choose focused tests when appropriate.
-- Test selection and impact analysis are heuristic static analysis only;
-    dynamic imports, plugins, reflection, and runtime behavior may not appear.
-
-CHANGE AND DEBUGGING WORKFLOW:
-1. Read the actual file and understand the relevant code.
-2. Analyze change impact and identify dependencies and dependents.
-3. Select relevant tests before modifying existing Python code.
-4. Make the smallest correct change and run focused tests.
-5. If tests fail, use diagnose_test_failure on the actual result.
-6. Locate and fix the actual cause, then rerun affected tests.
-7. Run broader tests for medium or high-impact changes.
-8. Never claim success without actual verification.
-9. Do not modify unrelated files merely to make tests pass.
-
-Never use permission-changing commands such as icacls or takeown
-unless the user explicitly requests such an operation.
-
-COMPUTER CONTROL:
-- Use computer and browser tools only for explicit user requests.
-- Never claim an application, browser, or Spotify action succeeded without
-    actual tool output.
-- Navigation and searching are generally safe; sending, purchasing,
-    submitting, deleting, uploading, and system changes require confirmation.
-- Never bypass security or disable antivirus, firewall, or Defender.
-"""
-
-    def _permission_check(self, tool_name: str, arguments: dict):
-        """Check whether a potentially dangerous operation is allowed."""
-
-        if tool_name == "run_command":
-            command = arguments.get("command", "")
-            return self.security.check_command(command)
-
-        if tool_name == "write_file":
-            path = arguments.get("path", "")
-            return self.security.check_file_write(path)
-
-        if tool_name == "edit_file":
-            path = arguments.get("path", "")
-            return self.security.check_file_edit(path)
-
-        if tool_name == "git_commit":
-            return self.security.check_git_commit()
-
-        if tool_name == "git_add":
-            return self.security.check_git_add()
-
-        if tool_name == "git_push":
-            return self.security.check_git_push()
-
-        if tool_name == "computer_control":
-            return self.security.check_computer_control(arguments.get("instruction", ""))
-
-        return PermissionLevel.SAFE
-
-    def _confirm(self, message: str) -> bool:
-        """Request user confirmation when required."""
-
-        if self.confirm_callback is None:
-            return False
-
-        try:
-            return bool(self.confirm_callback(message))
-        except Exception:
-            return False
-
-    def _execute_tool(self, tool_name: str, arguments: dict) -> str:
-        """Execute one tool after security checks."""
-
-        self.events.publish(EventType.TOOL_START, tool=tool_name, arguments=arguments)
-        logger.info("Tool execution: %s %s", tool_name, arguments)
-        permission = self._permission_check(tool_name, arguments)
-
-        if permission == PermissionLevel.BLOCK:
-            result = (
-                "BLOCKED: Security policy does not allow this operation."
-            )
-            self.events.publish(EventType.ERROR, tool=tool_name, error=result)
-            return result
-
-        if permission == PermissionLevel.CONFIRM:
-            description = (
-                f"JARVIS wants to execute {tool_name} "
-                f"with arguments:\n{json.dumps(arguments, indent=2)}"
-            )
-
-            if not self._confirm(description):
-                result = "CANCELLED: User denied confirmation."
-                self.events.publish(EventType.TOOL_END, tool=tool_name, result=result)
-                return result
-
-        tool_map = {
-            "open_application": open_application,
-            "run_command": run_command,
-            "list_directory": list_directory,
-            "search_files": search_files,
-            "read_file": read_file,
-            "write_file": write_file,
-            "edit_file": edit_file,
-            "run_tests": run_tests,
-            "git_status": git_status,
-            "git_diff": git_diff,
-            "git_diff_cached": git_diff_cached,
-            "git_log": git_log,
-            "git_branch": git_branch,
-            "git_add": git_add,
-            "git_commit": git_commit,
-            "git_push": git_push,
-            "build_code_index": build_code_index,
-            "search_code_relationships": search_code_relationships,
-            "build_code_relationships": build_code_relationships,
-            "build_change_impact": build_change_impact,
-            "select_tests_for_change": select_tests_for_change,
-            "diagnose_test_failure": diagnose_test_failure,
-            "health_check": health_check,
-            "computer_control": computer_control,
-            "computer_health": computer_health,
-            "open_browser": open_browser,
-            "open_url": open_url,
-            "browser_search": browser_search,
-            "browser_action": browser_action,
-            "spotify_status": spotify_status,
-            "spotify_play": spotify_play,
-            "spotify_pause": spotify_pause,
-            "spotify_next": spotify_next,
-            "spotify_previous": spotify_previous,
+        self.tool_map = {
+            tool.__name__: tool
+            for tool in self.tools
         }
 
-        tool = tool_map.get(tool_name)
+    def think(
+        self,
+        user_text: str,
+        context: list[dict[str, str]] | None = None,
+    ) -> str:
+        """Reason about a request and execute required tools."""
 
-        if tool is None:
-            result = f"ERROR: Unknown tool '{tool_name}'."
-            self.events.publish(EventType.ERROR, tool=tool_name, error=result)
-            return result
-
-        try:
-            result = tool(**arguments)
-
-            if isinstance(result, str):
-                result_text = result
-            else:
-                result_text = json.dumps(result, indent=2, default=str)
-
-            self.events.publish(EventType.TOOL_END, tool=tool_name, result=result_text)
-            return result_text
-
-        except Exception as exc:
-            logger.exception("Tool failed: %s", tool_name)
-            result = f"ERROR executing {tool_name}: {exc}"
-            self.events.publish(EventType.ERROR, tool=tool_name, error=str(exc))
-            return result
-
-    def _normalize_tool_request(self, tool_name: str, arguments: dict):
-        """
-        Normalize common model mistakes before execution.
-        """
-
-        if tool_name == "edit_file":
-            path = arguments.get("path", "")
-
-            if path:
-                try:
-                    import os
-
-                    if not os.path.exists(path):
-                        content = arguments.get("new_text", "")
-
-                        if content:
-                            return (
-                                "write_file",
-                                {
-                                    "path": path,
-                                    "content": content,
-                                },
-                            )
-                except Exception:
-                    pass
-
-        return tool_name, arguments
-
-    def _parse_json_tool_call(self, content: str):
-        """Parse JSON tool calls emitted as ordinary text."""
-
-        if not content:
-            return None
-
-        text = content.strip()
-
-        if text.startswith("```"):
-            text = re.sub(
-                r"^```(?:json)?\s*",
-                "",
-                text,
-                flags=re.IGNORECASE,
-            )
-            text = re.sub(r"\s*```$", "", text)
-
-        try:
-            data = json.loads(text)
-
-            if isinstance(data, dict):
-                tool_name = data.get("tool") or data.get("name")
-                arguments = (
-                    data.get("arguments")
-                    or data.get("parameters")
-                    or {}
-                )
-
-                if tool_name:
-                    return tool_name, arguments
-
-        except Exception:
-            pass
-
-        return None
-
-    def _final_response(self, messages) -> str:
-        """Ask the model for a final answer without tools."""
-
-        try:
-            response = chat(
-                model=self.model,
-                messages=messages,
-                think=False,
-            )
-
-            content = response.message.content or ""
-
-            return content.strip()
-
-        except Exception as exc:
-            return f"ERROR generating final response: {exc}"
-
-    def think(self, user_message: str) -> str:
-        """Process a user request and execute tools when needed."""
-
-        messages = [
+        messages: list[dict[str, Any]] = [
             {
                 "role": "system",
-                "content": self._system_prompt(),
-            },
-            {
-                "role": "user",
-                "content": user_message,
-            },
+                "content": self.SYSTEM_PROMPT,
+            }
         ]
 
-        previous_tool_calls = set()
+        if context:
+            messages.extend(context)
 
-        for _ in range(self.max_iterations):
-            try:
+        messages.append(
+            {
+                "role": "user",
+                "content": user_text,
+            }
+        )
+
+        self.events.publish(
+            EventType.THINKING_START,
+            text=user_text,
+        )
+
+        try:
+            for _ in range(self.MAX_TOOL_ITERATIONS):
                 response = chat(
                     model=self.model,
                     messages=messages,
                     tools=self.tools,
                     think=False,
                 )
-            except Exception as exc:
-                return f"ERROR communicating with Ollama: {exc}"
 
-            tool_calls = getattr(response.message, "tool_calls", None)
+                message = response.message
 
-            if tool_calls:
-                messages.append(
-                    {
-                        "role": "assistant",
-                        "content": response.message.content or "",
-                        "tool_calls": tool_calls,
-                    }
+                tool_calls = getattr(
+                    message,
+                    "tool_calls",
+                    None,
                 )
 
-                for tool_call in tool_calls:
-                    function = tool_call.function
-                    tool_name = function.name
-                    arguments = dict(function.arguments or {})
-
-                    tool_name, arguments = self._normalize_tool_request(
-                        tool_name,
-                        arguments,
-                    )
-
-                    call_signature = json.dumps(
-                        {
-                            "tool": tool_name,
-                            "arguments": arguments,
-                        },
-                        sort_keys=True,
-                        default=str,
-                    )
-
-                    if call_signature in previous_tool_calls:
-                        result = (
-                            "ERROR: The same tool call was already attempted. "
-                            "Do not repeat it. Use the existing result."
-                        )
-                    else:
-                        previous_tool_calls.add(call_signature)
-                        result = self._execute_tool(
-                            tool_name,
-                            arguments,
-                        )
-
+                if tool_calls:
                     messages.append(
                         {
-                            "role": "tool",
-                            "name": tool_name,
-                            "content": result,
+                            "role": "assistant",
+                            "content": getattr(
+                                message,
+                                "content",
+                                "",
+                            ),
+                            "tool_calls": tool_calls,
                         }
                     )
 
-                continue
+                    for call in tool_calls:
+                        name = call.function.name
+                        arguments = (
+                            call.function.arguments or {}
+                        )
 
-            content = response.message.content or ""
+                        result = self._execute_tool(
+                            name,
+                            arguments,
+                        )
 
-            fallback = self._parse_json_tool_call(content)
+                        messages.append(
+                            {
+                                "role": "tool",
+                                "content": result,
+                            }
+                        )
 
-            if fallback:
-                tool_name, arguments = fallback
+                    continue
 
-                tool_name, arguments = self._normalize_tool_request(
-                    tool_name,
-                    arguments,
+                content = getattr(
+                    message,
+                    "content",
+                    "",
                 )
 
-                call_signature = json.dumps(
-                    {
-                        "tool": tool_name,
-                        "arguments": arguments,
-                    },
-                    sort_keys=True,
+                if content:
+                    return str(content).strip()
+
+                return (
+                    "I completed the request but received "
+                    "no textual response."
+                )
+
+            return (
+                "I stopped because the tool execution limit "
+                "was reached. I will not keep repeating the "
+                "same operations indefinitely."
+            )
+
+        except Exception as exc:
+            self.logger.exception(
+                "Brain failure"
+            )
+
+            self.events.publish(
+                EventType.ERROR,
+                message=str(exc),
+            )
+
+            return f"I encountered an error: {exc}"
+
+        finally:
+            self.events.publish(
+                EventType.THINKING_END,
+            )
+
+    def _execute_tool(
+        self,
+        name: str,
+        arguments: dict[str, Any],
+    ) -> str:
+        """Execute one tool after applying safety checks."""
+
+        tool = self.tool_map.get(name)
+
+        if tool is None:
+            return json.dumps(
+                {
+                    "success": False,
+                    "error": f"Unknown tool: {name}",
+                }
+            )
+
+        permission = self._permission(
+            name,
+            arguments,
+        )
+
+        # Git operations have dedicated security checks.
+        #
+        # This keeps the Brain aligned with the public
+        # SecurityManager API used by the Git tests.
+        if name == "git_add":
+            permission = self.security.check_git_add()
+
+        elif name == "git_commit":
+            permission = self.security.check_git_commit()
+
+        elif name == "git_push":
+            permission = self.security.check_git_push()
+
+        # Handle explicit user confirmation.
+        if (
+            permission == PermissionLevel.CONFIRM
+            and name in {
+                "git_add",
+                "git_commit",
+                "git_push",
+            }
+            and self.confirm_callback is not None
+        ):
+            try:
+                confirmed = bool(
+                    self.confirm_callback(
+                        f"Confirm Git operation: {name}"
+                    )
+                )
+
+            except Exception:
+                self.logger.exception(
+                    "Git confirmation callback failed."
+                )
+
+                return (
+                    "BLOCKED: Confirmation callback failed."
+                )
+
+            if not confirmed:
+                return (
+                    "CANCELLED: User denied confirmation."
+                )
+
+            permission = PermissionLevel.SAFE
+
+        if permission == PermissionLevel.BLOCK:
+            return (
+                "BLOCKED: Operation blocked by JARVIS "
+                "security policy."
+            )
+
+        if permission == PermissionLevel.CONFIRM:
+            return (
+                "CONFIRMATION REQUIRED: This operation "
+                "requires user confirmation before execution."
+            )
+
+        self.events.publish(
+            EventType.TOOL_START,
+            tool=name,
+            arguments=arguments,
+        )
+
+        self.logger.info(
+            "Executing tool %s with %s",
+            name,
+            arguments,
+        )
+
+        try:
+            result = tool(**arguments)
+
+            if isinstance(result, str):
+                output = result
+
+            else:
+                output = json.dumps(
+                    result,
+                    ensure_ascii=False,
                     default=str,
                 )
 
-                if call_signature in previous_tool_calls:
-                    return (
-                        "ERROR: The model repeatedly requested the same "
-                        "operation."
-                    )
+            self.events.publish(
+                EventType.TOOL_END,
+                tool=name,
+                success=True,
+            )
 
-                previous_tool_calls.add(call_signature)
+            return output
 
-                result = self._execute_tool(
-                    tool_name,
-                    arguments,
+        except Exception as exc:
+            self.logger.exception(
+                "Tool %s failed",
+                name,
+            )
+
+            self.events.publish(
+                EventType.TOOL_END,
+                tool=name,
+                success=False,
+                error=str(exc),
+            )
+
+            return json.dumps(
+                {
+                    "success": False,
+                    "tool": name,
+                    "error": str(exc),
+                }
+            )
+
+    def _permission(
+        self,
+        name: str,
+        arguments: dict[str, Any],
+    ) -> PermissionLevel:
+        """Determine whether a tool operation is allowed."""
+
+        if name == "run_command":
+            command = arguments.get(
+                "command",
+                "",
+            )
+
+            return check_command(
+                command,
+                self.security,
+            )
+
+        if name == "write_file":
+            path = arguments.get(
+                "path",
+                "",
+            )
+
+            return check_file_write(
+                path,
+                self.security,
+            )
+
+        if name == "edit_file":
+            path = arguments.get(
+                "path",
+                "",
+            )
+
+            return check_file_edit(
+                path,
+                self.security,
+            )
+
+        if name in {
+            "git_add",
+            "git_commit",
+            "git_push",
+        }:
+            if name == "git_add":
+                return self.security.check_git_add()
+
+            if name == "git_commit":
+                return self.security.check_git_commit()
+
+            return self.security.check_git_push()
+
+        if name in {
+            "computer_control",
+            "browser_action",
+        }:
+            action = str(
+                arguments.get(
+                    "instruction",
+                    arguments.get(
+                        "action",
+                        "",
+                    ),
                 )
+            )
 
-                messages.append(
-                    {
-                        "role": "assistant",
-                        "content": content,
-                    }
-                )
+            return self.security.check_computer_control(
+                action
+            )
 
-                messages.append(
-                    {
-                        "role": "user",
-                        "content": (
-                            f"Tool result from {tool_name}:\n{result}\n\n"
-                            "Continue the task using the actual result."
-                        ),
-                    }
-                )
-
-                continue
-
-            return content.strip()
-
-        return self._final_response(messages)
+        return PermissionLevel.SAFE

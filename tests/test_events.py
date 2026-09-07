@@ -1,23 +1,71 @@
+"""Tests for the JARVIS event bus."""
+
 from app.agent.events import EventBus, EventType
 
 
-def test_event_bus_publish():
+def test_event_bus_publish_and_drain():
     bus = EventBus()
+
+    bus.publish(
+        EventType.USER_TEXT,
+        text="hello",
+    )
+
+    events = bus.drain()
+
+    assert len(events) == 1
+    assert events[0].type == EventType.USER_TEXT
+    assert events[0].data["text"] == "hello"
+
+
+def test_event_bus_dispatch():
+    bus = EventBus()
+
     received = []
-    bus.subscribe(EventType.RESPONSE, received.append)
 
-    event = bus.publish(EventType.RESPONSE, text="hello")
+    def callback(event):
+        received.append(event)
 
-    assert event.type == EventType.RESPONSE
-    assert event.data["text"] == "hello"
+    bus.subscribe(
+        EventType.RESPONSE,
+        callback,
+    )
+
+    bus.publish(
+        EventType.RESPONSE,
+        text="hello",
+    )
+
+    dispatched = bus.dispatch()
+
+    assert dispatched == 1
     assert len(received) == 1
+    assert received[0].data["text"] == "hello"
 
 
 def test_event_bus_unsubscribe():
     bus = EventBus()
+
     received = []
-    handler = received.append
-    bus.subscribe(EventType.RESPONSE, handler)
-    bus.unsubscribe(EventType.RESPONSE, handler)
-    bus.publish(EventType.RESPONSE, text="hello")
+
+    def callback(event):
+        received.append(event)
+
+    bus.subscribe(
+        EventType.RESPONSE,
+        callback,
+    )
+
+    bus.unsubscribe(
+        EventType.RESPONSE,
+        callback,
+    )
+
+    bus.publish(
+        EventType.RESPONSE,
+        text="hello",
+    )
+
+    bus.dispatch()
+
     assert received == []

@@ -1,109 +1,210 @@
-"""Lifecycle-managed background voice engine for JARVIS."""
+"""Background voice engine."""
 
 from __future__ import annotations
 
 import threading
-import time
 
 from app.agent.events import EventType, get_event_bus
-from app.agent.logging import logger
+from app.agent.logging import get_logger
 from app.voice.assistant import VoiceAssistant
 from app.voice.microphone import Microphone
 from app.voice.stt import SpeechToText
 from app.voice.vad import VoiceActivityDetector
-from app.voice.wakeword import WakeWord
+from app.voice.wakeword import WakeWordDetector
 
 
 class BackgroundVoiceEngine:
-    """Continuously listen for speech and process wake-word commands."""
+    """Continuously listens for speech and routes it to JARVIS."""
 
-    def __init__(self, assistant: VoiceAssistant | None = None, microphone=None, stt=None, vad=None, wakeword=None):
-        self.assistant = assistant or VoiceAssistant()
+    def __init__(
+        self,
+        assistant: VoiceAssistant,
+        microphone: Microphone | None = None,
+        stt: SpeechToText | None = None,
+        vad: VoiceActivityDetector | None = None,
+        wakeword: WakeWordDetector | None = None,
+    ):
+        self.assistant = assistant
+
         self.microphone = microphone or Microphone()
-        self.stt = stt or self.assistant.stt
+        self.stt = stt or SpeechToText()
         self.vad = vad or VoiceActivityDetector()
-        self.wakeword = wakeword or WakeWord("jarvis")
+        self.wakeword = wakeword or WakeWordDetector()
+
         self.events = get_event_bus()
-        self._thread = None
+        self.logger = get_logger()
+
         self._stop_event = threading.Event()
+        self._thread: threading.Thread | None = None
         self._running = False
-        self.on_status = None
 
     @property
     def running(self) -> bool:
         return self._running
 
-    def start(self) -> bool:
-        if self._running:
-            return True
-        self._stop_event.clear()
-        try:
-            self.microphone.start()
-        except Exception as exc:
-            logger.exception("Could not start microphone")
-            self.events.publish(EventType.ERROR, component="microphone", error=str(exc))
-            return False
-        self._running = True
-        self._thread = threading.Thread(target=self._run, name="JARVIS-Voice", daemon=True)
-        self._thread.start()
-        self.events.publish(EventType.LISTENING_STARTED)
-        self._status("Listening")
-        return True
+    def start(self) -> None:
+        """Start background voice processing."""
 
-    def stop(self):
+        if self._running:
+            return
+
+        self._stop_event.clear()
+
+        self.microphone.start()
+
+        self._running = True
+
+        self._thread = threading.Thread(
+            target=self._loop,
+            name="JARVIS-Voice",
+            daemon=True,
+        )
+
+        self._thread.start()
+
+        self.events.publish(
+            EventType.LISTENING_STARTED,
+        )
+
+        self.logger.info(
+            "Background voice engine started."
+        )
+
+    def stop(self) -> None:
+        """Stop background voice processing."""
+
         if not self._running:
             return
+
         self._stop_event.set()
+
         try:
             self.microphone.stop()
         except Exception:
-            logger.exception("Microphone stop failed")
-        if self._thread and self._thread.is_alive() and self._thread is not threading.current_thread():
+            self.logger.exception(
+                "Microphone stop failed."
+            )
+
+        if (
+            self._thread
+            and self._thread.is_alive()
+            and self._thread is not threading.current_thread()
+        ):
             self._thread.join(timeout=3)
+
         self._thread = None
         self._running = False
-        self.events.publish(EventType.LISTENING_STOPPED)
-        self._status("Stopped")
 
-    def _status(self, message: str):
-        if self.on_status:
-            try:
-                self.on_status(message)
-            except Exception:
-                pass
+        self.events.publish(
+            EventType.LISTENING_STOPPED,
+        )
 
-    def _run(self):
+        self.logger.info(
+            "Background voice engine stopped."
+        )
+
+    def _loop(self) -> None:
+        """Background microphone loop."""
+
         while not self._stop_event.is_set():
             try:
-                audio = self.microphone.read(timeout=0.5)
-                if audio is None or not len(audio):
-                    continue
-                if not self.vad.is_speech(audio):
-                    continue
-                self.events.publish(EventType.SPEECH_START)
-                chunks = [audio]
-                silence_count = 0
-                while not self._stop_event.is_set() and silence_count < 5:
-                    chunk = self.microphone.read(timeout=0.5)
-                    if chunk is None:
-                        continue
-                    chunks.append(chunk)
-                    silence_count = 0 if self.vad.is_speech(chunk) else silence_count + 1
-                self.events.publish(EventType.SPEECH_END)
-                text = self.stt.transcribe(self.microphone.combine(chunks)).strip()
-                if not text or not self.wakeword.detect(text):
-                    continue
-                self.events.publish(EventType.WAKE_WORD, text=text)
-                command = self.wakeword.remove(text).strip()
-                if command:
-                    self.assistant.process_text(command)
-                else:
-                    self.assistant.speak("Yes?")
+                audio = self.microphone.read(
+                    timeout=0.5
+                )
             except Exception as exc:
-                logger.exception("Voice worker failure")
-                self.events.publish(EventType.ERROR, component="voice", error=str(exc))
-                self._status(f"Voice error: {exc}")
-                time.sleep(1)
+                self.logger.warning(
+                    "Microphone read error: %s",
+                    exc,
+                )
+                continue
+
+            if audio is None:
+                continue
+
+            if not self.vad.is_speech(audio):
+                continue
+
+            self.events.publish(
+                EventType.SPEECH_START,
+            )
+
+            chunks = [audio]
+            silence_count = 0
+
+            while (
+                not self._stop_event.is_set()
+                and silence_count < 5
+            ):
+                try:
+                    chunk = self.microphone.read(
+                        timeout=0.5
+                    )
+                except Exception:
+                    break
+
+                if chunk is None:
+                    continue
+
+                chunks.append(chunk)
+
+                if self.vad.is_speech(chunk):
+                    silence_count = 0
+                else:
+                    silence_count += 1
+
+            self.events.publish(
+                EventType.SPEECH_END,
+            )
+
+            if self._stop_event.is_set():
+                break
+
+            try:
+                audio_data = self.microphone.combine(
+                    chunks
+                )
+
+                text = self.stt.transcribe(
+                    audio_data
+                ).strip()
+
+                if not text:
+                    continue
+
+                self.logger.info(
+                    "Voice transcription: %s",
+                    text,
+                )
+
+                detected, command = (
+                    self.wakeword.detect_and_remove(text)
+                )
+
+                if not detected:
+                    continue
+
+                self.events.publish(
+                    EventType.WAKE_WORD,
+                    text=text,
+                )
+
+                if not command:
+                    continue
+
+                self.assistant.process_text(
+                    command,
+                    speak=True,
+                )
+
+            except Exception:
+                self.logger.exception(
+                    "Background voice processing failed."
+                )
 
 
+# Compatibility alias.
+#
+# Older parts of the voice package import BackgroundVoice.
+# The current implementation is BackgroundVoiceEngine, so
+# both names intentionally refer to the same implementation.
 BackgroundVoice = BackgroundVoiceEngine
