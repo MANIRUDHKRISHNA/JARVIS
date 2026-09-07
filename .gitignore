@@ -11,8 +11,10 @@ venv/
 data/memory.json
 data/
 data/sessions/
+data/logs/
 *.wav
 *.mp3
+*.wav
 
 # Editor
 .vscode/

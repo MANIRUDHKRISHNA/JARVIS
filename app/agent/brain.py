@@ -6,6 +6,8 @@ from typing import Callable, Optional
 
 from ollama import chat
 
+from app.agent.events import EventType, get_event_bus
+from app.agent.logging import logger
 from app.agent.security import PermissionLevel, SecurityManager
 from app.tools.applications import open_application
 from app.tools.terminal import run_command
@@ -17,6 +19,10 @@ from app.tools.filesystem import (
     edit_file,
 )
 from app.tools.testing import run_tests
+from app.tools.health import health_check
+from app.tools.computer import computer_control, computer_health
+from app.tools.browser import browser_action, browser_search, open_browser, open_url
+from app.tools.spotify import spotify_next, spotify_pause, spotify_play, spotify_previous, spotify_status
 from app.tools.code_index import (
     build_code_index,
     search_code_relationships,
@@ -48,6 +54,7 @@ class Brain:
         self.model = model
         self.confirm_callback = confirm_callback
         self.security = SecurityManager()
+        self.events = get_event_bus()
 
         self.tools = [
             open_application,
@@ -72,6 +79,18 @@ class Brain:
             build_change_impact,
             select_tests_for_change,
             diagnose_test_failure,
+            health_check,
+            computer_control,
+            computer_health,
+            open_browser,
+            open_url,
+            browser_search,
+            browser_action,
+            spotify_status,
+            spotify_play,
+            spotify_pause,
+            spotify_next,
+            spotify_previous,
         ]
 
         self.max_iterations = 10
@@ -155,6 +174,14 @@ CHANGE AND DEBUGGING WORKFLOW:
 
 Never use permission-changing commands such as icacls or takeown
 unless the user explicitly requests such an operation.
+
+COMPUTER CONTROL:
+- Use computer and browser tools only for explicit user requests.
+- Never claim an application, browser, or Spotify action succeeded without
+    actual tool output.
+- Navigation and searching are generally safe; sending, purchasing,
+    submitting, deleting, uploading, and system changes require confirmation.
+- Never bypass security or disable antivirus, firewall, or Defender.
 """
 
     def _permission_check(self, tool_name: str, arguments: dict):
@@ -181,6 +208,9 @@ unless the user explicitly requests such an operation.
         if tool_name == "git_push":
             return self.security.check_git_push()
 
+        if tool_name == "computer_control":
+            return self.security.check_computer_control(arguments.get("instruction", ""))
+
         return PermissionLevel.SAFE
 
     def _confirm(self, message: str) -> bool:
@@ -197,12 +227,16 @@ unless the user explicitly requests such an operation.
     def _execute_tool(self, tool_name: str, arguments: dict) -> str:
         """Execute one tool after security checks."""
 
+        self.events.publish(EventType.TOOL_START, tool=tool_name, arguments=arguments)
+        logger.info("Tool execution: %s %s", tool_name, arguments)
         permission = self._permission_check(tool_name, arguments)
 
         if permission == PermissionLevel.BLOCK:
-            return (
+            result = (
                 "BLOCKED: Security policy does not allow this operation."
             )
+            self.events.publish(EventType.ERROR, tool=tool_name, error=result)
+            return result
 
         if permission == PermissionLevel.CONFIRM:
             description = (
@@ -211,7 +245,9 @@ unless the user explicitly requests such an operation.
             )
 
             if not self._confirm(description):
-                return "CANCELLED: User denied confirmation."
+                result = "CANCELLED: User denied confirmation."
+                self.events.publish(EventType.TOOL_END, tool=tool_name, result=result)
+                return result
 
         tool_map = {
             "open_application": open_application,
@@ -236,23 +272,43 @@ unless the user explicitly requests such an operation.
             "build_change_impact": build_change_impact,
             "select_tests_for_change": select_tests_for_change,
             "diagnose_test_failure": diagnose_test_failure,
+            "health_check": health_check,
+            "computer_control": computer_control,
+            "computer_health": computer_health,
+            "open_browser": open_browser,
+            "open_url": open_url,
+            "browser_search": browser_search,
+            "browser_action": browser_action,
+            "spotify_status": spotify_status,
+            "spotify_play": spotify_play,
+            "spotify_pause": spotify_pause,
+            "spotify_next": spotify_next,
+            "spotify_previous": spotify_previous,
         }
 
         tool = tool_map.get(tool_name)
 
         if tool is None:
-            return f"ERROR: Unknown tool '{tool_name}'."
+            result = f"ERROR: Unknown tool '{tool_name}'."
+            self.events.publish(EventType.ERROR, tool=tool_name, error=result)
+            return result
 
         try:
             result = tool(**arguments)
 
             if isinstance(result, str):
-                return result
+                result_text = result
+            else:
+                result_text = json.dumps(result, indent=2, default=str)
 
-            return json.dumps(result, indent=2, default=str)
+            self.events.publish(EventType.TOOL_END, tool=tool_name, result=result_text)
+            return result_text
 
         except Exception as exc:
-            return f"ERROR executing {tool_name}: {exc}"
+            logger.exception("Tool failed: %s", tool_name)
+            result = f"ERROR executing {tool_name}: {exc}"
+            self.events.publish(EventType.ERROR, tool=tool_name, error=str(exc))
+            return result
 
     def _normalize_tool_request(self, tool_name: str, arguments: dict):
         """

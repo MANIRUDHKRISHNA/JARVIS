@@ -7,10 +7,12 @@ import sys
 from PySide6.QtWidgets import QApplication
 
 from app.agent.health import ollama_available
+from app.agent.logging import logger
 from app.ui.main_window import MainWindow
 
 
 def main():
+    logger.info("Starting JARVIS.")
     app = QApplication(sys.argv)
     app.setApplicationName("JARVIS")
     app.setApplicationDisplayName("JARVIS")
@@ -26,7 +28,9 @@ def main():
             "Start Ollama before using the local AI brain.\n"
         )
 
-    return app.exec()
+    exit_code = app.exec()
+    logger.info("JARVIS stopped.")
+    return exit_code
 
 
 if __name__ == "__main__":

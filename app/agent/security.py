@@ -97,6 +97,26 @@ class SecurityManager:
 
         return PermissionLevel.CONFIRM
 
+    def check_computer_control(self, instruction: str) -> PermissionLevel:
+        """Classify computer-control actions before sending them externally."""
+
+        text = (instruction or "").lower()
+        blocked = [
+            "disable antivirus", "disable defender", "disable windows defender", "disable firewall",
+            "bypass security", "steal password", "extract password",
+            "dump credentials", "delete system32", "format drive",
+        ]
+        if any(pattern in text for pattern in blocked):
+            return PermissionLevel.BLOCK
+        confirm = [
+            "delete", "uninstall", "install", "purchase", "buy",
+            "send email", "send message", "submit", "upload",
+            "download and execute", "change system settings",
+        ]
+        if any(pattern in text for pattern in confirm):
+            return PermissionLevel.CONFIRM
+        return PermissionLevel.SAFE
+
     def _is_sensitive_path(self, path: str) -> bool:
         """Return True when a path looks like it contains secrets."""
 

@@ -17,6 +17,7 @@ from PySide6.QtWidgets import (
 )
 
 from app.agent.router import Router
+from app.agent.pipeline import AgentPipeline
 from app.agent.session import Session
 from app.config.app_config import AppConfig
 from app.ui.hotkey import GlobalHotkey
@@ -32,20 +33,20 @@ class RequestWorker(QThread):
     failed = Signal(str)
     confirmation_requested = Signal(object)
 
-    def __init__(self, text: str, config: AppConfig, session: Session):
+    def __init__(self, text: str, config: AppConfig, session: Session, pipeline: AgentPipeline | None = None):
         super().__init__()
         self.text = text
         self.config = config
         self.session = session
+        self.pipeline = pipeline
 
     def run(self):
         try:
-            router = Router(
-                model=self.config.get("model", "qwen3:8b"),
-                confirm_callback=self.request_confirmation,
-                session=self.session,
-            )
-            self.finished.emit(router.route(self.text))
+            if self.pipeline is not None:
+                self.finished.emit(self.pipeline.process(self.text))
+            else:
+                router = Router(model=self.config.get("model", "qwen3:8b"), confirm_callback=self.request_confirmation, session=self.session)
+                self.finished.emit(router.route(self.text))
         except Exception as exc:
             self.failed.emit(f"{type(exc).__name__}: {exc}")
 
@@ -62,14 +63,15 @@ class RequestWorker(QThread):
 class MainWindow(QMainWindow):
     """Main JARVIS application window."""
 
-    def __init__(self):
+    def __init__(self, pipeline: AgentPipeline | None = None, voice_engine=None):
         super().__init__()
         self.config = AppConfig()
         self.allow_close = False
         self.session = Session()
+        self.pipeline = pipeline or AgentPipeline(session=self.session)
         self.worker = None
         self.voice_assistant = None
-        self.background_voice = None
+        self.background_voice = voice_engine
         self._build_ui()
 
         self.tray = JarvisTray(self)
@@ -139,7 +141,7 @@ class MainWindow(QMainWindow):
         self.input.clear()
         self._append(f"\nYou:\n{text}\n")
         self._set_busy(True)
-        self.worker = RequestWorker(text, self.config, self.session)
+        self.worker = RequestWorker(text, self.config, self.session, self.pipeline)
         self.worker.finished.connect(self._request_finished)
         self.worker.failed.connect(self._request_failed)
         self.worker.confirmation_requested.connect(self._confirm_request)
@@ -177,13 +179,13 @@ class MainWindow(QMainWindow):
         self._append("\nListening...\n")
         try:
             if self.voice_assistant is None:
-                self.voice_assistant = VoiceAssistant(router=Router(session=self.session))
+                self.voice_assistant = VoiceAssistant(pipeline=self.pipeline)
             text = self.voice_assistant.listen_once(self.config.get("voice_record_seconds", 5))
             if not text:
                 self._append("JARVIS: I did not hear anything.\n")
                 return
             self._append(f"You:\n{text}\n")
-            response = self.voice_assistant.router.route(text)
+            response = self.voice_assistant.process_text(text)
             self._append(f"JARVIS:\n{response}\n")
             self.voice_assistant.tts.speak(response)
         except Exception as exc:
@@ -201,7 +203,7 @@ class MainWindow(QMainWindow):
         try:
             if self.background_voice is None:
                 if self.voice_assistant is None:
-                    self.voice_assistant = VoiceAssistant(router=Router(session=self.session))
+                    self.voice_assistant = VoiceAssistant(pipeline=self.pipeline)
                 self.background_voice = BackgroundVoice(self.voice_assistant)
                 self.background_voice.on_status = self.on_voice_status
 

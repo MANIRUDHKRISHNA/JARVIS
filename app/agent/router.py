@@ -49,6 +49,16 @@ class Router:
         "modify",
         "change",
         "edit",
+        "open chrome",
+        "browser",
+        "website",
+        "search the web",
+        "spotify",
+        "play music",
+        "computer",
+        "click",
+        "type into",
+        "navigate",
     }
 
     INSPECTION_KEYWORDS = {
