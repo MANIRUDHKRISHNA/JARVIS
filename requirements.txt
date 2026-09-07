@@ -1,0 +1,12 @@
+# Core dependencies
+
+# Add project dependencies here as they are introduced.
+# Examples:
+# pyttsx3
+# speechrecognition
+# pydantic
+# fastapi
+# requests
+# pygame
+
+pytest
