@@ -9,9 +9,10 @@ venv/
 .env
 .env.*
 data/memory.json
-data/config.json
+data/
 data/sessions/
-*.spec
+*.wav
+*.mp3
 
 # Editor
 .vscode/

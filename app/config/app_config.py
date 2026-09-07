@@ -16,6 +16,7 @@ DEFAULT_CONFIG = {
     "start_minimized": False,
     "minimize_to_tray": True,
     "voice_enabled": True,
+    "always_on_voice": False,
     "voice_record_seconds": 5,
     "global_hotkey": "CTRL+SHIFT+J",
 }

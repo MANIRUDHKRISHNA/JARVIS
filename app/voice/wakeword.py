@@ -2,31 +2,22 @@
 
 from __future__ import annotations
 
-import threading
-
-
 class WakeWord:
-    """Explicit activation controller; not an always-listening detector."""
+    """Detect and extract commands following the configured wake word."""
 
     def __init__(self, wake_word: str = "jarvis"):
-        self.wake_word = wake_word.lower()
-        self.active = False
-        self._lock = threading.Lock()
-
-    def activate(self):
-        with self._lock:
-            self.active = True
-
-    def deactivate(self):
-        with self._lock:
-            self.active = False
-
-    def is_active(self) -> bool:
-        with self._lock:
-            return self.active
+        self.wake_word = wake_word.lower().strip()
 
     def matches(self, text: str) -> bool:
-        return self.wake_word in text.lower()
+        return bool(text) and self.wake_word in text.lower()
+
+    def extract_command(self, text: str) -> str:
+        if not text:
+            return ""
+        position = text.lower().find(self.wake_word)
+        if position == -1:
+            return ""
+        return text[position + len(self.wake_word):].strip()
 
 
 WakeWordDetector = WakeWord

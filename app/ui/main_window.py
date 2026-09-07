@@ -22,6 +22,7 @@ from app.config.app_config import AppConfig
 from app.ui.hotkey import GlobalHotkey
 from app.ui.tray import JarvisTray
 from app.voice.assistant import VoiceAssistant
+from app.voice.background import BackgroundVoice
 
 
 class RequestWorker(QThread):
@@ -68,6 +69,7 @@ class MainWindow(QMainWindow):
         self.session = Session()
         self.worker = None
         self.voice_assistant = None
+        self.background_voice = None
         self._build_ui()
 
         self.tray = JarvisTray(self)
@@ -116,6 +118,10 @@ class MainWindow(QMainWindow):
         self.voice_button = QPushButton("Voice")
         self.voice_button.clicked.connect(self.voice_request)
         row.addWidget(self.voice_button)
+
+        self.always_on_button = QPushButton("Start Listening")
+        self.always_on_button.clicked.connect(self.toggle_background_voice)
+        row.addWidget(self.always_on_button)
 
         self.clear_button = QPushButton("Clear")
         self.clear_button.clicked.connect(self.clear_chat)
@@ -190,6 +196,35 @@ class MainWindow(QMainWindow):
         self.output.clear()
         self._append("JARVIS: Conversation cleared.")
 
+    @Slot()
+    def toggle_background_voice(self):
+        try:
+            if self.background_voice is None:
+                if self.voice_assistant is None:
+                    self.voice_assistant = VoiceAssistant(router=Router(session=self.session))
+                self.background_voice = BackgroundVoice(self.voice_assistant)
+                self.background_voice.on_status = self.on_voice_status
+
+            if self.background_voice.running:
+                self.stop_background_voice()
+                self._append("JARVIS: Background listening stopped.\n")
+            else:
+                self.background_voice.start()
+                self.always_on_button.setText("Stop Listening")
+                self._append("JARVIS: Background listening enabled. Say 'Jarvis' followed by your command.\n")
+        except Exception as exc:
+            self._append(f"BACKGROUND VOICE ERROR:\n{type(exc).__name__}: {exc}\n")
+
+    def on_voice_status(self, status: str):
+        self.status.setText(status.upper())
+
+    def stop_background_voice(self):
+        if self.background_voice is not None:
+            self.background_voice.stop()
+        if hasattr(self, "always_on_button"):
+            self.always_on_button.setText("Start Listening")
+        self.status.setText("ONLINE")
+
     def confirm_action(self, message: str) -> bool:
         result = QMessageBox.question(self, "JARVIS Confirmation", message, QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No, QMessageBox.StandardButton.No)
         return result == QMessageBox.StandardButton.Yes
@@ -213,6 +248,7 @@ class MainWindow(QMainWindow):
             self.hide()
             self.tray.tray.showMessage("JARVIS", "Still running in the system tray.", 2000)
             return
+        self.stop_background_voice()
         self.hotkey.stop()
         self.tray.hide()
         self.config.set("window_width", self.width())
