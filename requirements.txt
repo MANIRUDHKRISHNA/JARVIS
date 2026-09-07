@@ -17,3 +17,4 @@ sounddevice
 numpy
 faster-whisper
 pyttsx3
+pyinstaller

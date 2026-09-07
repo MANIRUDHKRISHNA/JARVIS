@@ -1,1 +1,2 @@
+"""JARVIS configuration."""
 """Configuration package."""

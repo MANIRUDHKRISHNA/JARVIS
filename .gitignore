@@ -9,7 +9,9 @@ venv/
 .env
 .env.*
 data/memory.json
+data/config.json
 data/sessions/
+*.spec
 
 # Editor
 .vscode/
