@@ -12,6 +12,8 @@ data/memory.json
 data/
 data/sessions/
 data/logs/
+logs/crashes/
+data/metrics.json
 *.wav
 *.mp3
 *.wav

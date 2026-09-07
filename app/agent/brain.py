@@ -3,12 +3,16 @@
 from __future__ import annotations
 
 import json
+import uuid
 from typing import Any
 
 from ollama import chat
 
 from app.agent.events import EventType, get_event_bus
 from app.agent.logging import get_logger
+from app.agent.health import diagnose_runtime, record_crash
+from app.agent.metrics import metrics
+from app.agent.model_manager import ModelManager
 from app.agent.security import (
     PermissionLevel,
     SecurityManager,
@@ -55,6 +59,7 @@ from app.tools.git import (
     git_push,
 )
 from app.tools.health import health_check
+from app.tools.runtime import diagnose_runtime as diagnose_runtime_tool
 from app.tools.system import SystemTools
 from app.tools.terminal import run_command
 from app.tools.testing import run_tests
@@ -129,6 +134,7 @@ You are a real local agent, not a fictional assistant pretending to control the 
 
         self.events = get_event_bus()
         self.logger = get_logger()
+        self.model_manager = ModelManager()
 
         self.system_tools = SystemTools()
 
@@ -159,6 +165,7 @@ You are a real local agent, not a fictional assistant pretending to control the 
             git_push,
 
             health_check,
+            diagnose_runtime_tool,
 
             computer_control,
             computer_health,
@@ -181,6 +188,8 @@ You are a real local agent, not a fictional assistant pretending to control the 
     ) -> str:
         """Reason about a request and execute required tools."""
 
+        request_id = str(uuid.uuid4())
+        metrics.start_response(request_id)
         messages: list[dict[str, Any]] = [
             {
                 "role": "system",
@@ -205,12 +214,7 @@ You are a real local agent, not a fictional assistant pretending to control the 
 
         try:
             for _ in range(self.MAX_TOOL_ITERATIONS):
-                response = chat(
-                    model=self.model,
-                    messages=messages,
-                    tools=self.tools,
-                    think=False,
-                )
+                response = self._chat_with_recovery(messages)
 
                 message = response.message
 
@@ -283,9 +287,12 @@ You are a real local agent, not a fictional assistant pretending to control the 
                 message=str(exc),
             )
 
+            record_crash(str(exc), gpu=diagnose_runtime(self.model_manager).get("gpu"))
+
             return f"I encountered an error: {exc}"
 
         finally:
+            metrics.finish_response(request_id)
             self.events.publish(
                 EventType.THINKING_END,
             )
@@ -423,6 +430,20 @@ You are a real local agent, not a fictional assistant pretending to control the 
                     "error": str(exc),
                 }
             )
+
+    def _chat_with_recovery(self, messages):
+        """Retry one model request only after recording a real failure."""
+
+        try:
+            return chat(model=self.model, messages=messages, tools=self.tools, think=False)
+        except Exception as exc:
+            diagnostics = diagnose_runtime(self.model_manager)
+            record_crash(str(exc), gpu=diagnostics.get("gpu"), ram=diagnostics.get("ram"))
+            self.logger.exception("Model request failed")
+            if self.model_manager.command and self.model_manager.restart():
+                self.events.publish(EventType.ERROR, message="Model failure detected; recovery attempted.")
+                return chat(model=self.model, messages=messages, tools=self.tools, think=False)
+            raise
 
     def _permission(
         self,

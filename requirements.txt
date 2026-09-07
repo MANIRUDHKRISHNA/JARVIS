@@ -19,3 +19,4 @@ faster-whisper
 pyttsx3
 pyinstaller
 pywin32
+psutil
