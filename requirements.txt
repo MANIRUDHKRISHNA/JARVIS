@@ -10,3 +10,10 @@
 # pygame
 
 pytest
+PySide6
+ollama
+requests
+sounddevice
+numpy
+faster-whisper
+pyttsx3
