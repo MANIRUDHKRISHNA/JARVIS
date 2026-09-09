@@ -53,13 +53,10 @@ class CodingWorkflow:
 
     def _invoke(self, tool: str, arguments: dict, *, require_verification: bool = False) -> str:
         """Run one explicit workflow action through the authoritative boundary."""
-        step = ExecutionStep(
-            tool, tool, arguments,
-            # Legacy read/test tools return evidence in their payload but do not
-            # carry a `verified` flag.  Their successful structured result is
-            # the verification criterion for these non-mutating operations.
-            verify=(None if require_verification else lambda result: result.success),
-        )
+        # Verification is owned by each tool result.  In particular, test
+        # execution and edits must carry their own evidence; workflow code
+        # must not promote a generic success response to verified.
+        step = ExecutionStep(tool, tool, arguments)
         report = self.engine.execute([step])
         if step.result is None:
             return f"ERROR: {report.stopped_reason or 'Tool did not produce a result.'}"

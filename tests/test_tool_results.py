@@ -16,6 +16,16 @@ def test_filesystem_success_has_verification_evidence():
     assert result.target == "demo.txt"
 
 
+def test_read_result_is_verified_by_the_observed_content_not_a_generic_success_string():
+    result = normalize_tool_result("read_file", "source contents", {"path": "demo.txt"})
+    assert result.success is True
+    assert result.verified is True
+
+    command = normalize_tool_result("run_command", "Command completed with exit code 0.")
+    assert command.success is True
+    assert command.verified is False
+
+
 def test_structured_failure_is_preserved():
     result = normalize_tool_result("run_tests", json.dumps({"success": False, "error": "tests failed"}))
     assert result.success is False

@@ -57,7 +57,13 @@ def normalize_tool_result(action: str, raw: Any, arguments: dict[str, Any] | Non
 
     text = str(raw).strip()
     failed = text.lower().startswith(("error:", "failed", "blocked:", "cancelled:", "confirmation required:"))
-    verified = action in {"write_file", "edit_file"} and text.lower().startswith("success:")
+    # A read returns the observed file content, which is direct evidence for
+    # that non-mutating operation. Writes/edits retain their existing read-back
+    # evidence convention; all other legacy success strings stay unverified.
+    verified = (
+        (action == "read_file" and not failed)
+        or (action in {"write_file", "edit_file"} and text.lower().startswith("success:"))
+    )
     return ToolResult(
         success=not failed,
         verified=verified,
