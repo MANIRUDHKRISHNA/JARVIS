@@ -2,17 +2,17 @@
 
 from __future__ import annotations
 
-import time
+import tempfile
 from pathlib import Path
 
-SCREENSHOT_DIR = Path(__file__).resolve().parents[2] / "data" / "screenshots"
-
-
 def _capture() -> str:
-    SCREENSHOT_DIR.mkdir(parents=True, exist_ok=True)
-    path = SCREENSHOT_DIR / f"screen_{time.strftime('%Y%m%d_%H%M%S')}.png"
     try:
         from PIL import ImageGrab
+        # Screenshots can contain credentials. Keep them temporary rather than
+        # silently building a permanent private screenshot archive.
+        handle = tempfile.NamedTemporaryFile(prefix="jarvis-screen-", suffix=".png", delete=False)
+        path = Path(handle.name)
+        handle.close()
         image = ImageGrab.grab()
         image.save(path)
         return str(path)

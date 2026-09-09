@@ -11,7 +11,8 @@ from app.agent.logging import get_logger
 from app.agent.pipeline import AgentPipeline
 from app.ui.main_window import MainWindow
 from app.voice.assistant import VoiceAssistant
-from app.voice.background import BackgroundVoiceEngine
+from app.voice.runtime import VoiceRuntime
+from app.voice.modes import VoiceMode
 
 
 def main() -> int:
@@ -37,9 +38,8 @@ def main() -> int:
         pipeline=pipeline
     )
 
-    voice_engine = BackgroundVoiceEngine(
-        assistant=voice_assistant
-    )
+    # Voice starts disabled unless a user explicitly enables it in the UI.
+    voice_engine = VoiceRuntime(assistant=voice_assistant, mode=VoiceMode.DISABLED)
 
     window = MainWindow(
         pipeline=pipeline,

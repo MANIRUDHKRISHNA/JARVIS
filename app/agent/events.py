@@ -31,6 +31,7 @@ class EventType(str, Enum):
 
     LISTENING_STARTED = "listening_started"
     LISTENING_STOPPED = "listening_stopped"
+    VOICE_STATE = "voice_state"
 
     HEALTH_CHECK = "health_check"
 

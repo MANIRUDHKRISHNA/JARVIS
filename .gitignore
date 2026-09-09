@@ -8,6 +8,7 @@ __pycache__/
 venv/
 .env
 .env.*
+.webui_secret_key
 data/memory.json
 data/
 data/sessions/

@@ -20,7 +20,8 @@ from PySide6.QtWidgets import (
 from app.agent.events import EventType, get_event_bus
 from app.agent.pipeline import AgentPipeline
 from app.voice.assistant import VoiceAssistant
-from app.voice.background import BackgroundVoiceEngine
+from app.voice.runtime import VoiceRuntime
+from app.voice.modes import VoiceMode
 
 
 class AgentWorker(QThread):
@@ -52,7 +53,7 @@ class MainWindow(QMainWindow):
     def __init__(
         self,
         pipeline: AgentPipeline,
-        voice_engine: BackgroundVoiceEngine,
+        voice_engine: VoiceRuntime,
     ):
         super().__init__()
 
@@ -232,14 +233,17 @@ class MainWindow(QMainWindow):
 
         else:
             try:
-                self.voice_engine.start()
+                self.voice_engine.start(VoiceMode.PUSH_TO_TALK)
+                # The button click is the explicit activation required for
+                # push-to-talk mode; capture itself runs off the GUI thread.
+                self.voice_engine.push_to_talk()
 
                 self.voice_button.setText(
                     "Stop Voice"
                 )
 
                 self.status_label.setText(
-                    "Listening for wake word..."
+                    "Listening for your command..."
                 )
 
             except Exception as exc:
@@ -305,6 +309,10 @@ class MainWindow(QMainWindow):
                 self.status_label.setText(
                     "Voice listening stopped."
                 )
+
+            elif event.type == EventType.VOICE_STATE:
+                state = event.data.get("state", "unknown").replace("_", " ")
+                self.status_label.setText(f"Voice: {state}.")
 
             elif event.type == EventType.ERROR:
                 message = event.data.get(
