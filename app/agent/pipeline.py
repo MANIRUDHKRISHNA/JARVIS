@@ -73,8 +73,7 @@ class AgentPipeline:
         return AutonomousTaskManager(self.execution)
 
     def create_coding_workflow(self, root: str | Path, *, dry_run: bool = False):
-        from app.agent.coding import CodingWorkflow
-        return CodingWorkflow(str(root), dry_run=dry_run, engine=self.execution, registry=self.registry)
+        return self._execution_owner().create_coding_workflow(str(root), dry_run=dry_run)
 
     def create_workbench(self, root: str | Path, memory=None):
         from app.agent.workbench import EngineeringWorkbench

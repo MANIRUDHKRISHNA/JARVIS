@@ -244,6 +244,11 @@ You are a real local agent, not a fictional assistant pretending to control the 
             ),
         )
 
+    def create_coding_workflow(self, root: str, *, dry_run: bool = False):
+        """Create a coding workflow on this Brain's authoritative boundary."""
+        from app.agent.coding import CodingWorkflow
+        return CodingWorkflow(root, dry_run=dry_run, engine=self.execution, registry=self.registry)
+
     def think(
         self,
         user_text: str,
