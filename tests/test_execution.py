@@ -24,6 +24,20 @@ def test_unverified_action_fails_without_fake_success():
     assert not report.success and step.status is StepStatus.FAILED
 
 
+def test_explicit_context_executor_receives_confirmation_without_tool_arguments():
+    calls = []
+
+    def context_executor(tool, arguments, confirmation_granted):
+        calls.append((tool, arguments, confirmation_granted))
+        return result(True, True)
+
+    engine = ExecutionEngine(lambda tool, args: result(), context_executor=context_executor)
+    report = engine.execute([ExecutionStep("confirm", "git_add", {"paths": ["x"]})], confirmation_granted=True)
+
+    assert report.success
+    assert calls == [("git_add", {"paths": ["x"]}, True)]
+
+
 def test_budget_prevents_duplicate_execution():
     engine = ExecutionEngine(lambda tool, args: result(), ExecutionLimits(max_steps=1))
     steps = [ExecutionStep("one", "x"), ExecutionStep("two", "y")]

@@ -54,3 +54,15 @@ def test_registry_treats_ui_launches_as_security_controlled_actions():
     registry.register(open_application, ToolMetadata("open_application", "Launch", "system"))
     blocked = json.loads(registry.dispatch("open_application", {"application": "notepad"}))
     assert not blocked["success"] and "Confirmation required" in blocked["error"]
+
+
+def test_confirmation_grant_does_not_override_security_block():
+    def run_command(command: str) -> str:
+        raise AssertionError("blocked commands must not execute")
+    registry = ToolRegistry()
+    registry.register(run_command, ToolMetadata("run_command", "Command", "terminal"))
+
+    result = json.loads(registry.dispatch("run_command", {"command": "shutdown /s"}, confirmation_granted=True))
+
+    assert not result["success"]
+    assert "Blocked" in result["error"]

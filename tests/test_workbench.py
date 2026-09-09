@@ -32,3 +32,18 @@ def test_workbench_routes_diagnostics_and_tests_through_its_engine(tmp_path, mon
         ("compile_project", {"project_path": str(tmp_path.resolve())}),
         ("run_tests", {"project_path": str(tmp_path.resolve()), "test_path": "test_sample.py"}),
     ]
+
+
+def test_workbench_does_not_promote_unverified_tool_success(tmp_path, monkeypatch):
+    def dispatch(tool, arguments):
+        return json.dumps({"success": True, "verified": False, "stdout": "accepted"})
+
+    bench = EngineeringWorkbench(str(tmp_path), ExecutionEngine(dispatch))
+    monkeypatch.setattr("app.agent.workbench.select_tests_for_change", lambda root, path: json.dumps({"selected_tests": ["test_sample.py"]}))
+
+    diagnosis = bench.diagnose()
+    selected = bench.targeted_tests("sample.py")
+
+    assert not diagnosis["success"]
+    assert not selected["success"]
+    assert selected["results"][0]["verified"] is False

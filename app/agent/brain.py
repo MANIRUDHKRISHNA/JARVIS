@@ -236,7 +236,13 @@ You are a real local agent, not a fictional assistant pretending to control the 
         for tool in self.tools:
             name = tool.__name__
             self.registry.register(tool, ToolMetadata(name, (tool.__doc__ or name).strip().split("\n")[0], categories.get(name, "system"), risk_level=RiskLevel.HIGH if name in high_risk else RiskLevel.LOW, confirmation_required=name in {"git_add", "git_commit", "git_push"}))
-        self.execution = ExecutionEngine(self.registry.dispatch, ExecutionLimits(max_steps=1, max_tool_calls=1))
+        self.execution = ExecutionEngine(
+            self.registry.dispatch,
+            ExecutionLimits(max_steps=1, max_tool_calls=1),
+            context_executor=lambda tool, arguments, granted: self.registry.dispatch(
+                tool, arguments, confirmation_granted=granted
+            ),
+        )
 
     def think(
         self,

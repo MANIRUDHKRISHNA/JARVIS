@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import inspect
 import time
 import uuid
 from dataclasses import dataclass, field
@@ -63,8 +62,11 @@ class ExecutionReport:
 class ExecutionEngine:
     """Executes explicit plans only; it never invents actions from prose."""
 
-    def __init__(self, tool_executor, limits: ExecutionLimits | None = None):
+    def __init__(self, tool_executor, limits: ExecutionLimits | None = None, context_executor=None):
         self.tool_executor = tool_executor
+        # Production registries can explicitly accept execution context.  The
+        # base executor remains compatible with simple two-argument test fakes.
+        self.context_executor = context_executor
         self.limits = limits or ExecutionLimits()
         self.cancel_event = Event()
         self.events = get_event_bus()
@@ -102,16 +104,13 @@ class ExecutionEngine:
                 step.status, step.started_at = StepStatus.RUNNING, time.perf_counter()
                 self.events.publish(EventType.EXECUTION_PROGRESS, task_id=task_id, step_id=step.id, status=step.status.value)
                 self.events.publish(EventType.TASK_STEP_STARTED, task_id=task_id, step_id=step.id, tool=step.tool)
-                # Confirmation is execution context, never tool input.  The
-                # authoritative registry receives it when supported; simple
-                # test executors keep their existing two-argument contract.
-                supports_confirmation = False
-                if confirmation_granted:
-                    try:
-                        supports_confirmation = "confirmation_granted" in inspect.signature(self.tool_executor).parameters
-                    except (TypeError, ValueError):
-                        pass
-                raw = self.tool_executor(step.tool, step.arguments, confirmation_granted=True) if supports_confirmation else self.tool_executor(step.tool, step.arguments)
+                # Confirmation is execution context, never tool input.  Only
+                # an explicitly configured context executor receives it.
+                raw = (
+                    self.context_executor(step.tool, step.arguments, confirmation_granted)
+                    if self.context_executor is not None
+                    else self.tool_executor(step.tool, step.arguments)
+                )
                 try: payload = json.loads(raw) if isinstance(raw, str) else raw
                 except json.JSONDecodeError: payload = raw
                 result = normalize_tool_result(step.tool, payload, step.arguments)

@@ -9,12 +9,11 @@ from pathlib import Path
 
 from app.agent.coding import CodingWorkflow
 from app.agent.capabilities import ToolRegistry
-from app.agent.execution import ExecutionEngine
+from app.agent.execution import ExecutionEngine, ExecutionStep
 from app.memory.models import Memory, MemoryType
 from app.memory.store import MemoryStore
 from app.tools.code_index import build_code_index, build_change_impact, diagnose_test_failure, select_tests_for_change
 from app.tools.git import git_branch, git_status
-from app.agent.execution import ExecutionStep
 
 
 @dataclass
@@ -40,7 +39,7 @@ class EngineeringWorkbench:
         self.workflow = CodingWorkflow(str(self.root), engine=engine, registry=registry)
 
     def _execute(self, tool: str, arguments: dict) -> dict:
-        step = ExecutionStep(tool, tool, arguments, verify=lambda result: result.success)
+        step = ExecutionStep(tool, tool, arguments)
         report = self.engine.execute([step])
         if step.result is None:
             return {"success": False, "verified": False, "error": report.stopped_reason or "Tool did not return a result."}

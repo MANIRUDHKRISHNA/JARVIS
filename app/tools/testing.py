@@ -104,6 +104,7 @@ def run_tests(project_path: str, test_path: str | None = None, timeout: int = 12
         counts = _pytest_counts(result["stdout"], result["stderr"])
         return json.dumps({
             "success": result["exit_code"] == 0 and not result["timed_out"],
+            "verified": result["exit_code"] == 0 and not result["timed_out"],
             "test_runner": "pytest",
             "target": str(target.relative_to(root)).replace("\\", "/") if target else None,
             **result,
@@ -114,6 +115,7 @@ def run_tests(project_path: str, test_path: str | None = None, timeout: int = 12
         result = _run([sys.executable, "-m", "py_compile", str(target)], root, timeout)
         return json.dumps({
             "success": result["exit_code"] == 0 and not result["timed_out"],
+            "verified": result["exit_code"] == 0 and not result["timed_out"],
             "test_runner": "py_compile",
             "target": str(target),
             "passed": 0,
