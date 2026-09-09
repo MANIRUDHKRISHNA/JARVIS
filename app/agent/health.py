@@ -72,8 +72,41 @@ def check_microphone() -> HealthResult:
         return HealthResult("Microphone", False, f"Microphone check failed: {exc}", {})
 
 
+def check_disk() -> HealthResult:
+    try:
+        usage = shutil.disk_usage(Path.cwd())
+        return HealthResult("Disk", True, "Disk status available.", {"free_bytes": usage.free, "total_bytes": usage.total})
+    except OSError as exc:
+        return HealthResult("Disk", False, f"Disk check failed: {exc}", {})
+
+
+def check_computer_gateway() -> HealthResult:
+    try:
+        from app.tools.computer import ComputerGateway
+        result = ComputerGateway().health()
+        return HealthResult("Computer", bool(result.get("available")), str(result.get("message", "Unavailable.")), {})
+    except Exception as exc:
+        return HealthResult("Computer", False, f"Computer gateway check failed: {exc}", {})
+
+
+def check_stt() -> HealthResult:
+    try:
+        import faster_whisper  # noqa: F401
+        return HealthResult("STT", True, "faster-whisper is installed; model loads on first use.", {})
+    except ImportError:
+        return HealthResult("STT", False, "faster-whisper is not installed.", {})
+
+
+def check_tts() -> HealthResult:
+    try:
+        import pyttsx3  # noqa: F401
+        return HealthResult("TTS", True, "pyttsx3 is installed; voice engine initializes on first use.", {})
+    except ImportError:
+        return HealthResult("TTS", False, "pyttsx3 is not installed.", {})
+
+
 def run_health_check() -> dict[str, Any]:
-    results = [check_python(), check_ollama(), check_git(), check_microphone()]
+    results = [check_python(), check_ollama(), check_git(), check_microphone(), check_disk(), check_computer_gateway(), check_stt(), check_tts()]
     return {"healthy": all(item.healthy for item in results), "checks": {item.name: {"healthy": item.healthy, "message": item.message, "details": item.details} for item in results}}
 
 

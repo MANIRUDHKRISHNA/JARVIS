@@ -7,6 +7,8 @@ class FakeMicrophone:
     def __init__(self): self.started = self.stopped = False
     def start(self): self.started = True
     def stop(self): self.stopped = True
+    def pause(self): pass
+    def resume(self): self.started = True
     def read(self, timeout=0.5): return []
 
 
@@ -66,3 +68,11 @@ def test_wake_mode_requires_real_acoustic_backend():
         assert "acoustic wake-word engine" in str(exc)
     else:
         raise AssertionError("wake-word mode must reject a missing backend")
+
+
+def test_pause_resume_do_not_replace_microphone_owner():
+    runtime, microphone, _ = make_runtime()
+    runtime.start()
+    runtime.pause()
+    runtime.resume()
+    assert microphone.started

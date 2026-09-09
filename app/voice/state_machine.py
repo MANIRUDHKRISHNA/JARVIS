@@ -38,6 +38,7 @@ _ALLOWED_TRANSITIONS: dict[VoiceState, set[VoiceState]] = {
     },
     VoiceState.WAKE_DETECTED: {
         VoiceState.LISTENING,
+        VoiceState.SPEAKING,
         VoiceState.STANDBY,
         VoiceState.ERROR,
         VoiceState.STOPPING,

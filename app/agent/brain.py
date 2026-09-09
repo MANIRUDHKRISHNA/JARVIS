@@ -21,6 +21,7 @@ from app.agent.security import (
     check_file_write,
 )
 from app.memory.store import MemoryStore
+from app.agent.results import normalize_tool_result
 
 from app.tools.applications import open_application
 from app.tools.browser import (
@@ -432,20 +433,12 @@ You are a real local agent, not a fictional assistant pretending to control the 
         try:
             result = tool(**arguments)
 
-            if isinstance(result, str):
-                output = result
-
-            else:
-                output = json.dumps(
-                    result,
-                    ensure_ascii=False,
-                    default=str,
-                )
+            output = normalize_tool_result(name, result, arguments).to_json()
 
             self.events.publish(
                 EventType.TOOL_END,
                 tool=name,
-                success=True,
+                success=json.loads(output).get("success", False),
             )
 
             return output

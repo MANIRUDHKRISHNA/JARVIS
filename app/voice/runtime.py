@@ -94,6 +94,27 @@ class VoiceRuntime:
             self._transition(VoiceState.DISABLED)
             self.events.publish(EventType.LISTENING_STOPPED)
 
+    def pause(self) -> None:
+        """Temporarily release capture activity without changing mode."""
+        if not self.running:
+            return
+        self.microphone.pause()
+        if self.wake_engine:
+            self.wake_engine.pause()
+
+    def resume(self) -> None:
+        """Resume a paused microphone/wake backend."""
+        if not self.running:
+            return
+        self.microphone.resume()
+        if self.wake_engine:
+            self.wake_engine.resume()
+
+    def reset(self) -> None:
+        """Clear the wake detector cooldown/state without creating a new owner."""
+        if self.wake_engine:
+            self.wake_engine.reset()
+
     def push_to_talk(self) -> None:
         if self.mode is not VoiceMode.PUSH_TO_TALK or self.state is not VoiceState.STANDBY:
             raise RuntimeError("Push-to-talk is unavailable in the current voice state.")
@@ -108,6 +129,14 @@ class VoiceRuntime:
             if result.detected:
                 self.events.publish(EventType.WAKE_WORD, confidence=result.confidence, keyword=result.keyword)
                 self._transition(VoiceState.WAKE_DETECTED)
+                # Deterministic acknowledgement: no LLM/tool call is needed.
+                self._transition(VoiceState.SPEAKING)
+                self.wake_engine.pause()
+                try:
+                    self.assistant.speak("Yes?")
+                finally:
+                    # Keep wake detection paused while the command is captured.
+                    pass
                 self._capture_and_process()
 
     def _capture_and_process(self) -> None:
@@ -141,3 +170,6 @@ class VoiceRuntime:
                 self._transition(VoiceState.ERROR)
                 self.events.publish(EventType.ERROR, message=f"Voice error: {exc}")
                 self._transition(VoiceState.STANDBY)
+        finally:
+            if self.wake_engine and not self._stop.is_set():
+                self.wake_engine.resume()
