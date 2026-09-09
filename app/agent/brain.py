@@ -59,7 +59,30 @@ from app.tools.git import (
     git_push,
 )
 from app.tools.health import health_check
+from app.tools.memory import (
+    remember_memory,
+    search_memory,
+    list_memories,
+    update_memory,
+    forget_memory,
+    clear_memory,
+)
 from app.tools.runtime import diagnose_runtime as diagnose_runtime_tool
+from app.tools.knowledge import (
+    index_file,
+    index_directory,
+    search_knowledge,
+    semantic_search,
+    get_document,
+    remove_document,
+    knowledge_status,
+)
+from app.tools.vision import (
+    capture_screen,
+    capture_active_window,
+    analyze_image,
+    verify_screen,
+)
 from app.tools.system import SystemTools
 from app.tools.terminal import run_command
 from app.tools.testing import run_tests
@@ -165,7 +188,24 @@ You are a real local agent, not a fictional assistant pretending to control the 
             git_push,
 
             health_check,
+            remember_memory,
+            search_memory,
+            list_memories,
+            update_memory,
+            forget_memory,
+            clear_memory,
             diagnose_runtime_tool,
+            index_file,
+            index_directory,
+            search_knowledge,
+            semantic_search,
+            get_document,
+            remove_document,
+            knowledge_status,
+            capture_screen,
+            capture_active_window,
+            analyze_image,
+            verify_screen,
 
             computer_control,
             computer_health,

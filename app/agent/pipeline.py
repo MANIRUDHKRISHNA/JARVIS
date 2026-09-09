@@ -8,6 +8,7 @@ from app.agent.events import EventType, get_event_bus
 from app.agent.logging import get_logger
 from app.agent.router import Router
 from app.agent.session import Session
+from app.memory.store import MemoryStore
 
 
 class AgentPipeline:
@@ -20,6 +21,7 @@ class AgentPipeline:
     ):
         self.router = router or Router()
         self.session = session if session is not None else Session()
+        self.memory = MemoryStore()
 
         self.events = get_event_bus()
         self.logger = get_logger()
@@ -70,6 +72,12 @@ class AgentPipeline:
             # this request. The current request is added only
             # after the router receives the previous context.
             context = self.session.as_messages()
+            memories = self.memory.search(user_text, limit=5)
+            if memories:
+                context.append({
+                    "role": "system",
+                    "content": "Relevant persistent memories:\n" + "\n".join(f"- {memory.content}" for memory in memories),
+                })
 
             response = self.router.route(
                 user_text,
