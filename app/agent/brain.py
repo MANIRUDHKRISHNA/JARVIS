@@ -88,7 +88,7 @@ from app.tools.vision import (
 )
 from app.tools.system import SystemTools
 from app.tools.terminal import run_command
-from app.tools.testing import run_tests
+from app.tools.testing import compile_project, run_tests
 
 
 class Brain:
@@ -173,6 +173,7 @@ You are a real local agent, not a fictional assistant pretending to control the 
             write_file,
             edit_file,
             run_tests,
+            compile_project,
 
             build_code_index,
             build_code_relationships,
@@ -226,7 +227,7 @@ You are a real local agent, not a fictional assistant pretending to control the 
         self.registry = ToolRegistry(self.security)
         categories = {
             "read_file": "filesystem", "write_file": "filesystem", "edit_file": "filesystem", "list_directory": "filesystem", "search_files": "filesystem",
-            "run_command": "terminal", "run_tests": "testing", "computer_control": "computer", "computer_health": "computer",
+            "run_command": "terminal", "run_tests": "testing", "compile_project": "testing", "computer_control": "computer", "computer_health": "computer",
             "open_browser": "browser", "open_url": "browser", "browser_search": "browser", "browser_action": "browser",
             "git_status": "git", "git_diff": "git", "git_diff_cached": "git", "git_log": "git", "git_branch": "git", "git_add": "git", "git_commit": "git", "git_push": "git",
             "remember_memory": "memory", "search_memory": "memory", "list_memories": "memory", "update_memory": "memory", "forget_memory": "memory", "clear_memory": "memory",
@@ -444,13 +445,12 @@ You are a real local agent, not a fictional assistant pretending to control the 
         )
 
         try:
-            # Even model-issued one-step actions use the same bounded engine as
-            # autonomous and workflow plans. The registry remains its executor.
-            executor = self.execution if not confirmation_granted else ExecutionEngine(
-                lambda tool, args: self.registry.dispatch(tool, args, confirmation_granted=True),
-                ExecutionLimits(max_steps=1, max_tool_calls=1),
+            # Confirmation is passed as execution context to the existing
+            # authoritative engine; it never creates a parallel executor.
+            report = self.execution.execute(
+                [ExecutionStep(name, name, arguments)],
+                confirmation_granted=confirmation_granted,
             )
-            report = executor.execute([ExecutionStep(name, name, arguments)])
             result = report.steps[0].result if report.steps else None
             output = result.to_json() if result else json.dumps({"success": False, "error": report.stopped_reason or "execution did not start"})
 

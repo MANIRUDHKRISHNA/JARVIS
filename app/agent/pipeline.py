@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from threading import RLock
+from pathlib import Path
 
 from app.agent.events import EventType, get_event_bus
 from app.agent.logging import get_logger
@@ -35,6 +36,53 @@ class AgentPipeline:
     def busy(self) -> bool:
         with self._lock:
             return self._busy
+
+    def _execution_owner(self):
+        """Return the Brain that owns this pipeline's production tool boundary."""
+        brain = getattr(self.router, "brain", None)
+        if brain is None or not hasattr(brain, "execution"):
+            raise RuntimeError("This pipeline router does not provide an execution owner.")
+        return brain
+
+    @property
+    def execution(self):
+        """The single production ExecutionEngine used by this pipeline."""
+        return self._execution_owner().execution
+
+    @property
+    def registry(self):
+        return self._execution_owner().registry
+
+    @property
+    def security(self):
+        return self._execution_owner().security
+
+    # These are the application-core construction paths for optional systems.
+    # They deliberately inject the existing Brain-owned boundary rather than
+    # allowing a production caller to build a parallel one.
+    def create_automation_engine(self, store, condition_check=None):
+        from app.agent.automation import AutomationEngine
+        return AutomationEngine(store, self.execution, condition_check)
+
+    def create_workflow_engine(self, store):
+        from app.agent.workflows import WorkflowEngine
+        return WorkflowEngine(store, self.execution)
+
+    def create_autonomous_task_manager(self):
+        from app.agent.autonomous import AutonomousTaskManager
+        return AutonomousTaskManager(self.execution)
+
+    def create_coding_workflow(self, root: str | Path, *, dry_run: bool = False):
+        from app.agent.coding import CodingWorkflow
+        return CodingWorkflow(str(root), dry_run=dry_run, engine=self.execution, registry=self.registry)
+
+    def create_workbench(self, root: str | Path, memory=None):
+        from app.agent.workbench import EngineeringWorkbench
+        return EngineeringWorkbench(str(root), self.execution, registry=self.registry, memory=memory)
+
+    def create_executor(self):
+        from app.agent.executor import Executor
+        return Executor(brain=self._execution_owner())
 
     def process(
         self,

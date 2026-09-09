@@ -1,4 +1,5 @@
 import subprocess
+import json
 
 from app.agent.brain import Brain
 from app.agent.security import PermissionLevel
@@ -118,3 +119,28 @@ def test_git_commit_and_push_require_confirmation():
         )
         == "CANCELLED: User denied confirmation."
     )
+
+
+def test_confirmed_git_uses_brains_existing_execution_engine(monkeypatch):
+    brain = Brain(confirm_callback=lambda message: True)
+    metadata = brain.registry.metadata("git_add")
+    brain.registry._tools["git_add"] = (
+        lambda project_path, paths: {"success": True, "verified": True, "message": "staged"},
+        metadata,
+        None,
+    )
+    calls = []
+    original_execute = brain.execution.execute
+
+    def tracked_execute(*args, **kwargs):
+        calls.append(kwargs.get("confirmation_granted"))
+        return original_execute(*args, **kwargs)
+
+    monkeypatch.setattr(brain.execution, "execute", tracked_execute)
+    # If the confirmation branch constructed a temporary engine, this makes
+    # the regression fail while leaving the already-owned engine usable.
+    monkeypatch.setattr("app.agent.brain.ExecutionEngine", lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("temporary engine created")))
+    result = json.loads(brain._execute_tool("git_add", {"project_path": ".", "paths": ["safe.py"]}))
+
+    assert result["success"] is True
+    assert calls == [True]

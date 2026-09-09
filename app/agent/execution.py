@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import inspect
 import time
 import uuid
 from dataclasses import dataclass, field
@@ -71,11 +72,13 @@ class ExecutionEngine:
     def cancel(self) -> None:
         self.cancel_event.set()
 
-    def execute(self, steps: list[ExecutionStep], task_id: str | None = None) -> ExecutionReport:
-        started, task_id = time.monotonic(), task_id or uuid.uuid4().hex
+    def execute(self, steps: list[ExecutionStep], task_id: str | None = None, *, confirmation_granted: bool = False) -> ExecutionReport:
+        # perf_counter has the resolution required for short per-step timeout
+        # enforcement on Windows; monotonic may be coarser on some hosts.
+        started, task_id = time.perf_counter(), task_id or uuid.uuid4().hex
         reason = None
         if len(steps) > self.limits.max_steps:
-            return ExecutionReport(task_id, steps, started, time.monotonic(), "step budget exceeded")
+            return ExecutionReport(task_id, steps, started, time.perf_counter(), "step budget exceeded")
         by_id = {step.id: step for step in steps}
         calls = 0
         while True:
@@ -85,7 +88,7 @@ class ExecutionEngine:
                     if step.status in {StepStatus.PENDING, StepStatus.READY}:
                         step.status = StepStatus.CANCELLED
                 break
-            if time.monotonic() - started > self.limits.max_execution_seconds:
+            if time.perf_counter() - started > self.limits.max_execution_seconds:
                 reason = "execution timeout"; break
             ready = [s for s in steps if s.status is StepStatus.PENDING and all(by_id.get(dep) and by_id[dep].status is StepStatus.VERIFIED for dep in s.dependencies)]
             for step in steps:
@@ -96,14 +99,23 @@ class ExecutionEngine:
             for step in ready:
                 if calls >= self.limits.max_tool_calls:
                     reason = "tool-call budget exceeded"; break
-                step.status, step.started_at = StepStatus.RUNNING, time.monotonic()
+                step.status, step.started_at = StepStatus.RUNNING, time.perf_counter()
                 self.events.publish(EventType.EXECUTION_PROGRESS, task_id=task_id, step_id=step.id, status=step.status.value)
                 self.events.publish(EventType.TASK_STEP_STARTED, task_id=task_id, step_id=step.id, tool=step.tool)
-                raw = self.tool_executor(step.tool, step.arguments)
+                # Confirmation is execution context, never tool input.  The
+                # authoritative registry receives it when supported; simple
+                # test executors keep their existing two-argument contract.
+                supports_confirmation = False
+                if confirmation_granted:
+                    try:
+                        supports_confirmation = "confirmation_granted" in inspect.signature(self.tool_executor).parameters
+                    except (TypeError, ValueError):
+                        pass
+                raw = self.tool_executor(step.tool, step.arguments, confirmation_granted=True) if supports_confirmation else self.tool_executor(step.tool, step.arguments)
                 try: payload = json.loads(raw) if isinstance(raw, str) else raw
                 except json.JSONDecodeError: payload = raw
                 result = normalize_tool_result(step.tool, payload, step.arguments)
-                calls += 1; step.result, step.finished_at = result, time.monotonic()
+                calls += 1; step.result, step.finished_at = result, time.perf_counter()
                 if step.timeout_seconds is not None and step.finished_at - step.started_at > step.timeout_seconds:
                     step.status, step.error = StepStatus.FAILED, "step timeout"
                     self.events.publish(EventType.EXECUTION_PROGRESS, task_id=task_id, step_id=step.id, status=step.status.value)
@@ -125,4 +137,4 @@ class ExecutionEngine:
                 if step.status is StepStatus.VERIFIED:
                     self.events.publish(EventType.TASK_STEP_COMPLETED, task_id=task_id, step_id=step.id)
             if reason: break
-        return ExecutionReport(task_id, steps, started, time.monotonic(), reason)
+        return ExecutionReport(task_id, steps, started, time.perf_counter(), reason)

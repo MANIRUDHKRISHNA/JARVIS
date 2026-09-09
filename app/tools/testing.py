@@ -125,3 +125,18 @@ def run_tests(project_path: str, test_path: str | None = None, timeout: int = 12
         }, indent=2)
 
     return json.dumps({"success": False, "error": "Pytest is unavailable.", "test_runner": None}, indent=2)
+
+
+def compile_project(project_path: str, timeout: int = 120) -> str:
+    """Compile the project's app and tests directories with verified output."""
+    root, error = _validate_project(project_path)
+    if error:
+        return json.dumps({"success": False, "verified": False, "error": error})
+    result = _run([sys.executable, "-m", "compileall", "-q", "app", "tests"], root, timeout)
+    success = result["exit_code"] == 0 and not result["timed_out"]
+    return json.dumps({
+        "success": success,
+        "verified": success,
+        "check": "compileall",
+        **result,
+    }, indent=2)
