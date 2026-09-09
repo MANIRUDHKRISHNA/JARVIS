@@ -34,3 +34,5 @@ def test_pipeline_stores_conversation():
 
     assert messages[1]["role"] == "assistant"
     assert messages[1]["content"] == "Hello from JARVIS."
+    assert pipeline.current_task is not None
+    assert pipeline.current_task.diagnostic()["state"] == "complete"

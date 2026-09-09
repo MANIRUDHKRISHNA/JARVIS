@@ -15,6 +15,7 @@ from PySide6.QtWidgets import (
     QTextEdit,
     QVBoxLayout,
     QWidget,
+    QGroupBox,
 )
 
 from app.agent.events import EventType, get_event_bus
@@ -82,6 +83,11 @@ class MainWindow(QMainWindow):
         self.status_label = QLabel(
             "JARVIS ready."
         )
+        self.control_center = QLabel("Task: idle\nVoice: disabled\nTools: awaiting inventory\nSecurity: confirmation required for sensitive actions")
+        self.control_center.setWordWrap(True)
+        panel = QGroupBox("Control Center")
+        panel_layout = QVBoxLayout(panel)
+        panel_layout.addWidget(self.control_center)
 
         self.chat = QTextEdit()
         self.chat.setReadOnly(True)
@@ -140,6 +146,7 @@ class MainWindow(QMainWindow):
         layout.addWidget(
             self.status_label
         )
+        layout.addWidget(panel)
         layout.addWidget(
             self.chat
         )
@@ -275,6 +282,7 @@ class MainWindow(QMainWindow):
         )
 
         for event in events:
+            self._refresh_control_center()
             if event.type == EventType.TOOL_START:
                 tool = event.data.get(
                     "tool",
@@ -328,6 +336,17 @@ class MainWindow(QMainWindow):
                     "System",
                     message,
                 )
+
+    def _refresh_control_center(self) -> None:
+        """Cheap GUI-thread snapshot; expensive work stays in AgentWorker."""
+        task = self.pipeline.current_task.diagnostic() if self.pipeline.current_task else {"state": "idle", "current_step": None, "elapsed_seconds": 0}
+        voice = "running" if self.voice_engine.running else "disabled"
+        self.control_center.setText(
+            f"Task: {task['state']} ({task.get('current_step') or 'waiting'})\n"
+            f"Elapsed: {task['elapsed_seconds']}s\n"
+            f"Voice: {voice}\n"
+            "Security: confirmation required for sensitive actions"
+        )
 
     def _append_message(
         self,

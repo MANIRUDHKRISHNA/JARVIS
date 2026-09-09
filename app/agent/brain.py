@@ -22,6 +22,8 @@ from app.agent.security import (
 )
 from app.memory.store import MemoryStore
 from app.agent.results import normalize_tool_result
+from app.agent.capabilities import RiskLevel, ToolMetadata, ToolRegistry
+from app.agent.execution import ExecutionEngine, ExecutionLimits, ExecutionStep
 
 from app.tools.applications import open_application
 from app.tools.browser import (
@@ -221,6 +223,19 @@ You are a real local agent, not a fictional assistant pretending to control the 
             tool.__name__: tool
             for tool in self.tools
         }
+        self.registry = ToolRegistry(self.security)
+        categories = {
+            "read_file": "filesystem", "write_file": "filesystem", "edit_file": "filesystem", "list_directory": "filesystem", "search_files": "filesystem",
+            "run_command": "terminal", "run_tests": "testing", "computer_control": "computer", "computer_health": "computer",
+            "open_browser": "browser", "open_url": "browser", "browser_search": "browser", "browser_action": "browser",
+            "git_status": "git", "git_diff": "git", "git_diff_cached": "git", "git_log": "git", "git_branch": "git", "git_add": "git", "git_commit": "git", "git_push": "git",
+            "remember_memory": "memory", "search_memory": "memory", "list_memories": "memory", "update_memory": "memory", "forget_memory": "memory", "clear_memory": "memory",
+        }
+        high_risk = {"write_file", "edit_file", "run_command", "open_application", "computer_control", "open_browser", "open_url", "browser_search", "browser_action", "git_add", "git_commit", "git_push"}
+        for tool in self.tools:
+            name = tool.__name__
+            self.registry.register(tool, ToolMetadata(name, (tool.__doc__ or name).strip().split("\n")[0], categories.get(name, "system"), risk_level=RiskLevel.HIGH if name in high_risk else RiskLevel.LOW, confirmation_required=name in {"git_add", "git_commit", "git_push"}))
+        self.execution = ExecutionEngine(self.registry.dispatch, ExecutionLimits(max_steps=1, max_tool_calls=1))
 
     def think(
         self,
@@ -345,20 +360,17 @@ You are a real local agent, not a fictional assistant pretending to control the 
     ) -> str:
         """Execute one tool after applying safety checks."""
 
-        tool = self.tool_map.get(name)
+        # Registry dispatch is the only tool boundary: it validates availability,
+        # applies SecurityManager policy and normalizes real results.
+        if self.registry.get(name) is None:
+            return json.dumps({"success": False, "error": f"Unknown tool: {name}"})
 
-        if tool is None:
-            return json.dumps(
-                {
-                    "success": False,
-                    "error": f"Unknown tool: {name}",
-                }
-            )
+        validation_error = self.registry.validate(name, arguments)
+        if validation_error:
+            return json.dumps({"success": False, "tool": name, "error": validation_error, "status": "failed"})
 
-        permission = self._permission(
-            name,
-            arguments,
-        )
+        permission = self.registry.permission(name, arguments)
+        confirmation_granted = False
 
         # Git operations have dedicated security checks.
         #
@@ -405,6 +417,7 @@ You are a real local agent, not a fictional assistant pretending to control the 
                 )
 
             permission = PermissionLevel.SAFE
+            confirmation_granted = True
 
         if permission == PermissionLevel.BLOCK:
             return (
@@ -431,9 +444,15 @@ You are a real local agent, not a fictional assistant pretending to control the 
         )
 
         try:
-            result = tool(**arguments)
-
-            output = normalize_tool_result(name, result, arguments).to_json()
+            # Even model-issued one-step actions use the same bounded engine as
+            # autonomous and workflow plans. The registry remains its executor.
+            executor = self.execution if not confirmation_granted else ExecutionEngine(
+                lambda tool, args: self.registry.dispatch(tool, args, confirmation_granted=True),
+                ExecutionLimits(max_steps=1, max_tool_calls=1),
+            )
+            report = executor.execute([ExecutionStep(name, name, arguments)])
+            result = report.steps[0].result if report.steps else None
+            output = result.to_json() if result else json.dumps({"success": False, "error": report.stopped_reason or "execution did not start"})
 
             self.events.publish(
                 EventType.TOOL_END,

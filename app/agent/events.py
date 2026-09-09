@@ -38,6 +38,14 @@ class EventType(str, Enum):
     TASK_STARTED = "task_started"
     TASK_FINISHED = "task_finished"
     TASK_FAILED = "task_failed"
+    EXECUTION_PROGRESS = "execution_progress"
+    TASK_PLANNING = "task_planning"
+    TASK_STEP_STARTED = "task_step_started"
+    TASK_STEP_COMPLETED = "task_step_completed"
+    TASK_VERIFICATION = "task_verification"
+    TASK_RECOVERY = "task_recovery"
+    TASK_CONFIRMATION_REQUIRED = "task_confirmation_required"
+    TASK_CANCELLED = "task_cancelled"
 
 
 @dataclass

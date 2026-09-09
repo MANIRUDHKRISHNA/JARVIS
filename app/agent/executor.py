@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from app.agent.brain import Brain
+from app.agent.execution import ExecutionEngine, ExecutionLimits, ExecutionStep
 
 
 class Executor:
@@ -12,6 +13,13 @@ class Executor:
 
     def __init__(self, model: str = "qwen3:8b", brain=None):
         self.brain = brain if brain is not None else Brain(model=model)
+        # Do not create a parallel dispatch path: Brain's engine is already
+        # backed by its ToolRegistry and SecurityManager.
+        self.execution = self.brain.execution
+
+    def execute_plan(self, steps: list[ExecutionStep]):
+        """Run an explicit bounded plan through the authoritative Brain security path."""
+        return self.execution.execute(steps)
 
     def execute(self, task: str, steps=None) -> str:
         prompt = f"""

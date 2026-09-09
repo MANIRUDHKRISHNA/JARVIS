@@ -36,6 +36,9 @@ class CommandCapture:
         capture_started_at = time.monotonic()
         speech_started_at: float | None = None
         last_speech_at: float | None = None
+        speech_duration = 0.0
+        trailing_silence_duration = 0.0
+        trailing_silence_frames = 0
 
         while True:
             if cancelled is not None and cancelled.is_set():
@@ -49,6 +52,9 @@ class CommandCapture:
 
             now = time.monotonic()
             is_speech = self.vad.is_speech(frame)
+            # Audio duration, rather than loop wall time, makes capture
+            # deterministic for both hardware blocks and test/fake streams.
+            frame_duration = len(frame) / float(getattr(self.microphone, "sample_rate", 16000))
 
             if is_speech:
                 if speech_started_at is None:
@@ -56,10 +62,15 @@ class CommandCapture:
 
                 last_speech_at = now
                 chunks.append(frame)
+                speech_duration += frame_duration
+                trailing_silence_duration = 0.0
+                trailing_silence_frames = 0
 
             elif speech_started_at is not None:
                 # Keep trailing silence so STT receives a natural endpoint.
                 chunks.append(frame)
+                trailing_silence_duration += frame_duration
+                trailing_silence_frames += 1
 
             # Nothing has been said yet.
             if speech_started_at is None:
@@ -75,8 +86,9 @@ class CommandCapture:
             # Speech has stopped.
             if (
                 last_speech_at is not None
-                and now - last_speech_at >= self.silence_timeout
-                and now - speech_started_at >= self.min_speech_duration
+                and trailing_silence_duration >= self.silence_timeout
+                and trailing_silence_frames >= 2
+                and speech_duration >= self.min_speech_duration
             ):
                 break
 

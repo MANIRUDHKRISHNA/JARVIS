@@ -9,6 +9,7 @@ from app.agent.logging import get_logger
 from app.agent.router import Router
 from app.agent.session import Session
 from app.memory.store import MemoryStore
+from app.agent.orchestration import TaskLifecycle, TaskState
 
 
 class AgentPipeline:
@@ -28,6 +29,7 @@ class AgentPipeline:
 
         self._lock = RLock()
         self._busy = False
+        self.current_task: TaskLifecycle | None = None
 
     @property
     def busy(self) -> bool:
@@ -56,11 +58,15 @@ class AgentPipeline:
             self._busy = True
 
         try:
+            self.current_task = TaskLifecycle()
+            self.current_task.update(TaskState.THINKING, "routing request")
             self.logger.info("User request: %s", user_text)
 
             self.events.publish(
                 EventType.TASK_STARTED,
                 text=user_text,
+                task_id=self.current_task.task_id,
+                state=self.current_task.state.value,
             )
 
             self.events.publish(
@@ -72,7 +78,7 @@ class AgentPipeline:
             # this request. The current request is added only
             # after the router receives the previous context.
             context = self.session.as_messages()
-            memories = self.memory.search(user_text, limit=5)
+            memories = self.memory.context(user_text, max_items=5, max_characters=1200)
             if memories:
                 context.append({
                     "role": "system",
@@ -83,6 +89,7 @@ class AgentPipeline:
                 user_text,
                 context=context,
             )
+            self.current_task.update(TaskState.VERIFYING, "recording response")
 
             response = str(response).strip()
 
@@ -96,6 +103,8 @@ class AgentPipeline:
             self.session.add_user(user_text)
             self.session.add_assistant(response)
 
+            self.current_task.update(TaskState.COMPLETE)
+
             self.events.publish(
                 EventType.RESPONSE,
                 text=response,
@@ -105,6 +114,9 @@ class AgentPipeline:
                 EventType.TASK_FINISHED,
                 text=user_text,
                 response=response,
+                task_id=self.current_task.task_id,
+                state=TaskState.COMPLETE.value,
+                diagnostic=self.current_task.diagnostic(),
             )
 
             if on_response:
@@ -118,6 +130,8 @@ class AgentPipeline:
             return response
 
         except Exception as exc:
+            if self.current_task:
+                self.current_task.update(TaskState.FAILED, error=str(exc))
             error = f"JARVIS pipeline error: {exc}"
 
             self.logger.exception(
@@ -133,11 +147,14 @@ class AgentPipeline:
                 EventType.TASK_FAILED,
                 text=user_text,
                 error=str(exc),
+                task_id=self.current_task.task_id if self.current_task else None,
             )
 
             return error
 
         finally:
+            if self.current_task and self.current_task.state is not TaskState.FAILED:
+                self.current_task.update(TaskState.COMPLETE)
             with self._lock:
                 self._busy = False
 
