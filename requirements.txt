@@ -1,22 +1,28 @@
-# Core dependencies
-
-# Add project dependencies here as they are introduced.
-# Examples:
-# pyttsx3
-# speechrecognition
-# pydantic
-# fastapi
-# requests
-# pygame
-
+# Testing
 pytest
+
+# Desktop UI
 PySide6
+
+# Local LLM
 ollama
+
+# HTTP / API
 requests
+
+# Audio
 sounddevice
 numpy
+
+# Speech recognition
 faster-whisper
+
+# Text-to-speech
 pyttsx3
-pyinstaller
+
+# Windows integration
 pywin32
 psutil
+
+# Packaging
+pyinstaller
