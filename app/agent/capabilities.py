@@ -149,12 +149,14 @@ class ToolRegistry:
         if name == "git_push": return self.security.check_git_push()
         if name in {"computer_control", "browser_action"}:
             return self.security.check_computer_control(str(arguments.get("instruction", arguments.get("action", ""))))
-        if name in {"open_application", "open_browser", "open_url", "browser_search"}:
-            detail = arguments.get("application") or arguments.get("url") or arguments.get("query") or name
+        if name in {"open_application", "open_browser", "open_url"}:
+            detail = arguments.get("application") or arguments.get("url") or name
             # These tools can cause an external UI action even when their
             # implementation delegates to the computer gateway internally.
             return self.security.check_computer_control(f"execute {name}: {detail}")
-        # Metadata can request confirmation, never waive SecurityManager rules.
+        # browser_search is read-only research. It may open the browser, but
+        # it does not perform an external mutation, so it must not block every
+        # factual question behind a confirmation prompt.
         if metadata.confirmation_required:
             return PermissionLevel.CONFIRM
         return PermissionLevel.SAFE
