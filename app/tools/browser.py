@@ -18,7 +18,13 @@ def open_url(url: str) -> str:
 
 
 def browser_search(query: str, max_results: int = 5) -> str:
-    """Search Google and return structured organic search evidence for JARVIS to reason over."""
+    """
+    Search Google for externally verifiable facts and return structured
+    organic search evidence for JARVIS to reason over.
+
+    Use this tool before answering uncertain, current, specific, or
+    externally verifiable factual questions.
+    """
     if not query or not query.strip():
         return "ERROR: Search query cannot be empty."
 

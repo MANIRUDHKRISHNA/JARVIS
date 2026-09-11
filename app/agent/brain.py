@@ -212,6 +212,23 @@ CRITICAL RULES:
 20. If a tool fails, report the actual failure.
 21. Keep tool calls precise and use the minimum required arguments.
 22. Do not repeatedly call a tool after confirmation is required.
+23. For externally verifiable factual questions, use browser_search before
+    answering when the information may be uncertain, current, specific,
+    person-related, entertainment-related, historical, numerical, or
+    otherwise easy to verify online.
+
+24. Questions involving "who played", "who is", "when did", "where is",
+    "latest", "current", "today", "news", "price", "score", "release",
+    "version", "verify", "fact check", or similar factual requests should
+    normally use browser_search.
+
+25. When browser_search returns evidence, use that evidence as the basis
+    for the answer instead of relying on model memory.
+
+26. Never contradict verified search evidence using unsupported memory.
+
+27. If browser_search fails or returns NO_RESULTS, explicitly state that
+    the information could not be verified. Do not invent an answer.
 
 CODING WORKFLOW:
 
@@ -448,7 +465,6 @@ the machine.
             "computer_control",
             "open_browser",
             "open_url",
-            "browser_search",
             "browser_action",
             "git_add",
             "git_commit",
