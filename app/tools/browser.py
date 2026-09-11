@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from urllib.parse import quote_plus
-
 from app.tools.computer import computer_control
 
 
@@ -63,3 +61,10 @@ Rules:
 
     result = computer_control(instruction)
     return result.strip() if result else "ERROR: Google Search returned no result."
+
+
+def browser_action(instruction: str) -> str:
+    """Execute a browser instruction through the local computer gateway."""
+    if not instruction or not instruction.strip():
+        return "ERROR: Browser instruction cannot be empty."
+    return computer_control(f"Using the browser, {instruction}")
