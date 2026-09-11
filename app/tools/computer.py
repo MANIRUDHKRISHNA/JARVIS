@@ -22,37 +22,86 @@ class ComputerGateway:
 
     def health(self) -> dict[str, Any]:
         if not self.config.enabled:
-            return {"available": False, "message": "Computer control is disabled."}
+            return {
+                "available": False,
+                "message": "Computer control is disabled.",
+            }
+
         if not self.api_key:
-            return {"available": False, "message": "JARVIS_CPTR_API_KEY is not configured."}
+            return {
+                "available": False,
+                "message": "JARVIS_CPTR_API_KEY is not configured.",
+            }
+
         try:
-            response = requests.get(self.config.base_url, headers={"Authorization": f"Bearer {self.api_key}"}, timeout=5)
-            return {"available": response.ok, "status_code": response.status_code, "message": "cptr gateway reachable." if response.ok else f"cptr gateway returned HTTP {response.status_code}."}
+            response = requests.get(
+                self.config.base_url,
+                headers={
+                    "Authorization": f"Bearer {self.api_key}",
+                },
+                timeout=5,
+            )
+
+            return {
+                "available": response.ok,
+                "status_code": response.status_code,
+                "message": (
+                    "cptr gateway reachable."
+                    if response.ok
+                    else f"cptr gateway returned HTTP {response.status_code}."
+                ),
+            }
+
         except requests.RequestException as exc:
-            return {"available": False, "message": str(exc)}
+            return {
+                "available": False,
+                "message": str(exc),
+            }
 
     def execute(self, instruction: str) -> str:
         if not self.config.enabled:
             return "ERROR: Computer control is disabled."
+
         if not self.api_key:
             return "ERROR: Computer gateway API key is not configured."
+
         if not instruction or not instruction.strip():
             return "ERROR: Empty computer instruction."
+
         try:
             response = requests.post(
                 f"{self.config.base_url}/chat/completions",
-                headers={"Authorization": f"Bearer {self.api_key}", "Content-Type": "application/json"},
-                json={"model": self.config.model, "messages": [{"role": "user", "content": instruction}]},
+                headers={
+                    "Authorization": f"Bearer {self.api_key}",
+                    "Content-Type": "application/json",
+                },
+                json={
+                    "model": self.config.model,
+                    "messages": [
+                        {
+                            "role": "user",
+                            "content": instruction,
+                        }
+                    ],
+                },
                 timeout=self.config.timeout,
             )
+
             response.raise_for_status()
+
             choices = response.json().get("choices", [])
+
             if not choices:
                 return "ERROR: Computer gateway returned no response."
-            return str(choices[0].get("message", {}).get("content", "")).strip()
+
+            return str(
+                choices[0].get("message", {}).get("content", "")
+            ).strip()
+
         except requests.RequestException as exc:
             logger.exception("Computer gateway request failed")
             return f"ERROR: Computer gateway request failed: {exc}"
+
         except Exception as exc:
             logger.exception("Computer control failed")
             return f"ERROR: Computer control failed: {exc}"

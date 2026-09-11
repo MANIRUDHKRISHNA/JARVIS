@@ -112,6 +112,25 @@ from app.tools.vision import (
 MAX_TOOL_ITERATIONS = 8
 CONFIRMATION_TIMEOUT_SECONDS = 300
 
+WEB_RESEARCH_INDICATORS = (
+    "who played",
+    "who is",
+    "who was",
+    "when did",
+    "where is",
+    "latest",
+    "current",
+    "today",
+    "news",
+    "price",
+    "score",
+    "release",
+    "version",
+    "verify",
+    "fact check",
+    "fact-check",
+)
+
 
 YES_RESPONSES = {
     "yes",
@@ -648,6 +667,32 @@ the machine.
     # Reasoning
     # ------------------------------------------------------------------
 
+    @staticmethod
+    def needs_web_research(text: str) -> bool:
+        """Return True when a request needs externally verifiable facts."""
+        lowered = str(text).lower().strip()
+
+        return any(
+            indicator in lowered
+            for indicator in WEB_RESEARCH_INDICATORS
+        )
+
+    def _get_web_research_evidence(
+        self,
+        user_text: str,
+        *,
+        request_id: str,
+    ) -> str:
+        """Run the authoritative browser search before factual reasoning."""
+        return self._execute_tool(
+            "browser_search",
+            {
+                "query": user_text,
+                "max_results": 5,
+            },
+            request_id=request_id,
+        )
+
     def think(
         self,
         user_text: str,
@@ -684,6 +729,27 @@ the machine.
         )
 
         try:
+            if self.needs_web_research(user_text):
+                research_result = self._get_web_research_evidence(
+                    user_text,
+                    request_id=request_id,
+                )
+
+                messages.append(
+                    {
+                        "role": "system",
+                        "content": (
+                            "WEB RESEARCH EVIDENCE FROM browser_search:\n"
+                            f"{research_result}\n\n"
+                            "Use this evidence as the primary factual source. "
+                            "Do not replace verified search evidence with "
+                            "unsupported memory. If the result reports "
+                            "ERROR or NO_RESULTS, state that the information "
+                            "could not be verified and do not invent an answer."
+                        ),
+                    }
+                )
+
             for _ in range(MAX_TOOL_ITERATIONS):
                 response = self._chat_with_recovery(
                     messages
@@ -1318,7 +1384,6 @@ the machine.
             "computer_control",
             "open_browser",
             "open_url",
-            "browser_search",
             "browser_action",
         }:
             return (

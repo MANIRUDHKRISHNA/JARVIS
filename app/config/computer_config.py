@@ -10,7 +10,7 @@ from dataclasses import dataclass
 class ComputerConfig:
     enabled: bool = True
     base_url: str = "http://localhost:8000/v1"
-    model: str = "qwen3:8b"
+    model: str = "cptr/repos"
     timeout: int = 120
 
     @classmethod
