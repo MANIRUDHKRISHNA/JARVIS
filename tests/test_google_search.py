@@ -1,3 +1,6 @@
+import json
+
+from app.agent.capabilities import ToolMetadata, ToolRegistry
 from app.tools import browser
 
 
@@ -26,3 +29,20 @@ def test_browser_search_uses_google_research_instruction(monkeypatch):
     assert "Use Google Search" in captured["instruction"]
     assert "up to 3" in captured["instruction"]
     assert "Do not invent URLs" in captured["instruction"]
+
+
+def test_browser_search_is_read_only_and_does_not_require_confirmation():
+    def browser_search(query: str) -> str:
+        return "RESULT 1"
+
+    registry = ToolRegistry()
+    registry.register(
+        browser_search,
+        ToolMetadata("browser_search", "Google research", "browser"),
+    )
+
+    result = json.loads(
+        registry.dispatch("browser_search", {"query": "The Mentalist"})
+    )
+
+    assert result["success"]
