@@ -76,7 +76,16 @@ class ToolRegistry:
 
     def __init__(self, security: SecurityManager | None = None, approved_roots: tuple[str | Path, ...] | None = None):
         self.security = security or SecurityManager()
-        self.approved_roots = tuple(Path(root).resolve() for root in (approved_roots or (Path(__file__).resolve().parents[2],)))
+        self.approved_roots = tuple(
+            Path(root).resolve()
+            for root in (
+                approved_roots
+                or (
+                    Path("C:\\"),
+                    Path("D:\\"),
+                )
+            )
+        )
         self._tools: dict[str, tuple[Callable[..., Any], ToolMetadata, Callable[[], tuple[bool, str]] | None]] = {}
 
     @staticmethod
